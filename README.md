@@ -81,7 +81,16 @@ are shown as a `diff` block.
 
 ## Claude Code integration
 
-Create `~/.claude/commands/review.md`:
+The repo ships a `/diffreview` command in
+[`.claude/commands/diffreview.md`](.claude/commands/diffreview.md). Install it for all your
+projects:
+
+```sh
+mkdir -p ~/.claude/commands
+cp .claude/commands/diffreview.md ~/.claude/commands/
+```
+
+It contains:
 
 ```markdown
 ---
@@ -93,7 +102,7 @@ allowed-tools: Bash(diffreview) Bash(diffreview *)
 Address each review comment above. If something is unclear, ask before changing it.
 ```
 
-Then run `/review` (or `/review --base main`) in any repository. Cancelling the
+Then run `/diffreview` (or `/diffreview --base main`) in any repository. Cancelling the
 review makes the command abort, so nothing is sent to Claude.
 
 **Timeout:** Claude Code runs `!` commands under the Bash tool's default timeout of
