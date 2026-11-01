@@ -8,6 +8,8 @@ Run `diffreview` in a git repository and a window opens with the diff. Leave inl
 comments on lines or ranges, file-level comments and an overall summary, then click
 **Submit review**. The review is printed to stdout as markdown and the process exits.
 
+![diffreview showing a diff with an inline comment and a range comment being written](docs/screenshot.png)
+
 ## Requirements
 
 - macOS 14 or later
