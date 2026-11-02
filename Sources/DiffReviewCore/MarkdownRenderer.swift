@@ -53,6 +53,10 @@ public enum MarkdownRenderer {
         if c.isFileLevel { return body }
         var s = "### \(c.rangeLabel)\n\n"
         if !c.snippet.isEmpty { s += codeBlock(c.snippet, path: c.path) + "\n\n" }
+        if let selected = c.selectedText, !selected.isEmpty {
+            s += "Selected text:\n\n" + fenced(selected.components(separatedBy: "\n"),
+                                                 lang: Language.fenceName(forPath: c.path)) + "\n\n"
+        }
         return s + body
     }
 
@@ -69,8 +73,11 @@ public enum MarkdownRenderer {
             case .context: return " " + t
             }
         }
+        return fenced(texts, lang: asDiff ? "diff" : Language.fenceName(forPath: path))
+    }
+
+    static func fenced(_ texts: [String], lang: String) -> String {
         let fence = String(repeating: "`", count: max(3, longestBacktickRun(texts) + 1))
-        let lang = asDiff ? "diff" : Language.fenceName(forPath: path)
         return fence + lang + "\n" + texts.joined(separator: "\n") + "\n" + fence
     }
 

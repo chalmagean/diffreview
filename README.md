@@ -45,6 +45,7 @@ Uncommitted changes are not included in that mode.
 ### Reviewing
 
 - **Click a line** to comment on it. **Shift-click** another line in the same file to extend the comment to a range.
+- **Drag across code** to comment on just part of it: a few characters, or from the middle of one line to the middle of another.
 - **⌘↩** adds the comment, **Esc** cancels. Existing comments can be edited or deleted.
 - **Comment on file** (in each file header) adds a file-level comment.
 - **Finish review** (⌘⇧↩) opens the summary box and the **Submit review** button.
@@ -74,6 +75,9 @@ let the = "selected lines"
 
 The comment.
 ````
+
+When only part of the lines was selected, the full lines are still shown for context,
+followed by a `Selected text:` block with the exact selection.
 
 Line numbers refer to the new version of the file, or to the old version (`(old)`)
 when only deleted lines are selected. Selections that mix added and removed lines

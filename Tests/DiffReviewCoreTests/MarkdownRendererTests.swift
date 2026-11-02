@@ -158,6 +158,62 @@ struct MarkdownRendererTests {
         #expect(MarkdownRenderer.render(draft: draft, files: []) == "# Code Review\n\nNo comments.\n")
     }
 
+    @Test("partial selection keeps the full lines as context and adds the selected text")
+    func partialSelectionRender() throws {
+        let lines = files[0].allLines
+        // "+let c = 4" and "+let d = 5": select from "4" through "let d".
+        let selected = SelectedText.extract(lines: [lines[3].text, lines[4].text], startOffset: 8, endOffset: 5)
+        #expect(selected == "4\nlet d")
+        let c = ReviewComment.line(path: files[0].path, lines: Array(lines[3...4]), body: "Why?", selectedText: selected)
+        #expect(c.selectedText == "4\nlet d")
+        var draft = ReviewDraft()
+        draft.comments = [c]
+        let md = MarkdownRenderer.render(draft: draft, files: files)
+        #expect(md.contains("""
+        ### Lines 42-43 (new)
+
+        ```swift
+        let c = 4
+        let d = 5
+        ```
+
+        Selected text:
+
+        ```swift
+        4
+        let d
+        ```
+
+        Why?
+
+        """))
+    }
+
+    @Test("single-line partial selection")
+    func singleLineSelection() {
+        #expect(SelectedText.extract(lines: ["let value = compute()"], startOffset: 4, endOffset: 9) == "value")
+    }
+
+    @Test("selections covering whole lines are not partial")
+    func wholeLineSelection() {
+        #expect(SelectedText.extract(lines: ["abc", "de"], startOffset: 0, endOffset: 2) == nil)
+        #expect(SelectedText.extract(lines: ["abc"], startOffset: 1, endOffset: 1) == nil)
+        #expect(SelectedText.extract(lines: ["abc\r"], startOffset: 0, endOffset: 3) == nil)
+    }
+
+    @Test("offsets are clamped and UTF-16 based")
+    func offsetsClamped() {
+        #expect(SelectedText.extract(lines: ["héllo 👋 x"], startOffset: 6, endOffset: 8) == "👋")
+        #expect(SelectedText.extract(lines: ["ab", "cd"], startOffset: 1, endOffset: 99) == "b\ncd")
+    }
+
+    @Test("drafts saved before partial selections still decode")
+    func legacyDecode() throws {
+        let json = #"{"version":1,"summary":"","comments":[{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","path":"a","body":"b","snippet":[],"createdAt":0}]}"#
+        let draft = try JSONDecoder().decode(ReviewDraft.self, from: Data(json.utf8))
+        #expect(draft.comments.first?.selectedText == nil)
+    }
+
     @Test("CR is stripped from snippets, tabs kept")
     func cleanSnippet() {
         var draft = ReviewDraft()

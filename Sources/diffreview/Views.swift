@@ -76,24 +76,15 @@ struct TopBar: View {
 struct FinishReviewView: View {
     @Bindable var store: ReviewStore
     @Binding var isPresented: Bool
-    @FocusState private var focused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Finish your review").font(.headline)
-            TextEditor(text: $store.draft.summary)
-                .font(.body)
-                .focused($focused)
+            PlaceholderTextEditor(text: $store.draft.summary, placeholder: "Overall summary (optional)")
                 .frame(width: 420, height: 140)
-                .scrollContentBackground(.hidden)
                 .padding(4)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
-                .overlay(alignment: .topLeading) {
-                    if store.draft.summary.isEmpty {
-                        Text("Overall summary (optional)").foregroundStyle(.tertiary).padding(9).allowsHitTesting(false)
-                    }
-                }
             let count = store.draft.comments.count
             Text(count == 0 ? "No inline or file comments." : "\(count) comment\(count == 1 ? "" : "s") will be included.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -115,7 +106,6 @@ struct FinishReviewView: View {
             }
         }
         .padding(14)
-        .onAppear { focused = true }
     }
 }
 
@@ -393,46 +383,52 @@ struct LineBlock: View {
         let comments = line.anchor.flatMap { store.lineComments[file.path]?[$0] } ?? []
         let showComposer = store.composerLine(fileID: file.id) == index
         VStack(alignment: .leading, spacing: 0) {
-        LineRow(line: line, digits: file.gutterDigits,
-                code: store.highlighter.highlight(displayText(line.text), language: file.language),
-                selected: store.isSelected(fileID: file.id, lineIndex: index))
-            .onTapGesture {
-                store.click(fileID: file.id, lineIndex: index, extend: NSEvent.modifierFlags.contains(.shift))
+            LineRow(line: line, digits: file.gutterDigits,
+                    selected: store.isSelected(fileID: file.id, lineIndex: index),
+                    onClick: { extend in store.click(fileID: file.id, lineIndex: index, extend: extend) }) {
+                CodeLineView(
+                    code: store.highlighter.highlight(codeText(line.text), language: file.language),
+                    fileID: file.id, lineIndex: index,
+                    highlight: store.highlight(fileID: file.id, lineIndex: index),
+                    noNewlineAtEnd: line.noNewlineAtEnd,
+                    onClick: { extend in store.click(fileID: file.id, lineIndex: index, extend: extend) },
+                    onDragBegin: { offset in store.beginTextSelection(fileID: file.id, lineIndex: index, offset: offset) },
+                    onDragMove: { line, offset in store.extendTextSelection(fileID: file.id, lineIndex: line, offset: offset) },
+                    onDragEnd: store.endTextSelection)
             }
-        if !comments.isEmpty || showComposer {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(comments) { comment in
-                    CommentView(store: store, comment: comment, outdated: false)
+            if !comments.isEmpty || showComposer {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(comments) { comment in
+                        CommentView(store: store, comment: comment, outdated: false)
+                    }
+                    if showComposer, let sel = store.selection {
+                        ComposerView(text: $store.composerText,
+                                     title: composerTitle(sel),
+                                     quote: store.partialText(sel),
+                                     onCancel: store.cancelComposer, onSubmit: store.addLineComment)
+                    }
                 }
-                if showComposer, let sel = store.selection {
-                    ComposerView(text: $store.composerText,
-                                 title: composerTitle(sel),
-                                 onCancel: store.cancelComposer, onSubmit: store.addLineComment)
-                }
+                .padding(.vertical, 4)
+                .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
             }
-            .padding(.vertical, 4)
-            .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
-        }
         }
     }
 
     func composerTitle(_ sel: LineSelection) -> String {
         let preview = ReviewComment.line(path: file.path, lines: Array(file.lines[sel.range]), body: "")
-        return "Comment on \(preview.rangeLabel.lowercased()) · shift-click to extend"
+        if sel.isCharacterSelection {
+            return "Comment on the selected text · \(preview.rangeLabel.lowercased())"
+        }
+        return "Comment on \(preview.rangeLabel.lowercased()) · shift-click to extend · drag to select text"
     }
 }
 
-func displayText(_ text: String) -> String {
-    var t = text
-    if t.hasSuffix("\r") { t.removeLast() }
-    return t.replacingOccurrences(of: "\t", with: "    ")
-}
-
-struct LineRow: View {
+struct LineRow<Code: View>: View {
     let line: DiffLine
     let digits: Int
-    let code: AttributedString
     let selected: Bool
+    let onClick: (_ extend: Bool) -> Void
+    @ViewBuilder let code: () -> Code
 
     var body: some View {
         let (marker, bg, gutterBG): (String, Color, Color) = {
@@ -443,34 +439,29 @@ struct LineRow: View {
             }
         }()
         HStack(alignment: .top, spacing: 0) {
-            Text(line.oldNumber.map(String.init) ?? "")
-                .frame(width: gutterWidth(digits), alignment: .trailing)
-                .padding(.trailing, 4)
-                .foregroundStyle(.secondary)
-            Text(line.newNumber.map(String.init) ?? "")
-                .frame(width: gutterWidth(digits), alignment: .trailing)
-                .padding(.trailing, 4)
-                .foregroundStyle(.secondary)
-                .background(gutterBG)
-            Text(marker)
-                .frame(width: 16)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                Text(code)
-                    .fixedSize(horizontal: false, vertical: true)
-                if line.noNewlineAtEnd {
-                    Image(systemName: "nosign")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.red)
-                        .help("No newline at end of file")
-                }
+            // The gutter takes line clicks; the code column handles its own clicks and drags.
+            HStack(alignment: .top, spacing: 0) {
+                Text(line.oldNumber.map(String.init) ?? "")
+                    .frame(width: gutterWidth(digits), alignment: .trailing)
+                    .padding(.trailing, 4)
+                    .foregroundStyle(.secondary)
+                Text(line.newNumber.map(String.init) ?? "")
+                    .frame(width: gutterWidth(digits), alignment: .trailing)
+                    .padding(.trailing, 4)
+                    .foregroundStyle(.secondary)
+                    .background(gutterBG)
+                Text(marker)
+                    .frame(width: 16)
+                    .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .font(codeFont)
+            .contentShape(Rectangle())
+            .onTapGesture { onClick(NSEvent.modifierFlags.contains(.shift)) }
+            code()
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .font(codeFont)
         .padding(.vertical, 1)
         .background(selected ? Palette.selected : bg)
-        .contentShape(Rectangle())
     }
 }
 
@@ -479,6 +470,7 @@ struct LineRow: View {
 struct ComposerView: View {
     @Binding var text: String
     let title: String
+    var quote: String? = nil
     var submitLabel = "Add comment"
     let onCancel: () -> Void
     let onSubmit: () -> Void
@@ -487,6 +479,7 @@ struct ComposerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.caption).foregroundStyle(.secondary)
+            if let quote { SelectedTextQuote(text: quote) }
             TextEditor(text: $text)
                 .font(.body)
                 .focused($focused)
@@ -551,6 +544,7 @@ struct CommentView: View {
                         .foregroundStyle(.red)
                 }
                 .font(.caption)
+                if let selected = comment.selectedText { SelectedTextQuote(text: selected) }
                 Text(comment.body)
                     .font(.body)
                     .textSelection(.enabled)
@@ -567,5 +561,20 @@ struct CommentView: View {
 
     var label: String {
         comment.isFileLevel ? "File comment" : comment.rangeLabel
+    }
+}
+
+/// The exact text a comment refers to when only part of the lines was selected.
+struct SelectedTextQuote: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(codeFont)
+            .lineLimit(6)
+            .textSelection(.enabled)
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 4).fill(Color(nsColor: .selectedTextBackgroundColor).opacity(0.5)))
     }
 }
