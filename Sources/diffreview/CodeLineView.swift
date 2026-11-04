@@ -9,6 +9,9 @@ struct CodeLineView: NSViewRepresentable {
     let fileID: Int
     let lineIndex: Int
     let highlight: LineHighlight?
+    /// Word-level changes to mark, and their colour.
+    var emphasis: [NSRange] = []
+    var emphasisColor: NSColor = .clear
     let noNewlineAtEnd: Bool
     let onClick: (_ extend: Bool) -> Void
     let onDragBegin: (_ offset: Int) -> Void
@@ -29,6 +32,7 @@ struct CodeLineView: NSViewRepresentable {
         view.onDragMove = onDragMove
         view.onDragEnd = onDragEnd
         view.configure(code: code, font: font, highlight: highlight, noNewlineAtEnd: noNewlineAtEnd)
+        view.setEmphasis(emphasis, color: emphasisColor)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: CodeLineNSView, context: Context) -> CGSize? {
@@ -51,6 +55,8 @@ final class CodeLineNSView: NSView {
     private var code: AttributedString?
     private var font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
     private var highlight: LineHighlight?
+    private var emphasis: [NSRange] = []
+    private var emphasisColor: NSColor = .clear
     private var noNewlineAtEnd = false
     private var mouseDownLocation: NSPoint?
     private var mouseDownOffset = 0
@@ -86,6 +92,18 @@ final class CodeLineNSView: NSView {
             needsDisplay = true
         }
         toolTip = noNewlineAtEnd ? "No newline at end of file" : nil
+    }
+
+    func setEmphasis(_ ranges: [NSRange], color: NSColor) {
+        guard ranges != emphasis || color != emphasisColor else { return }
+        emphasis = ranges
+        emphasisColor = color
+        needsDisplay = true
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
     }
 
     private static func attributed(_ code: AttributedString, font: NSFont) -> NSAttributedString {
@@ -133,6 +151,7 @@ final class CodeLineNSView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         layout(width: bounds.width)
         let glyphs = layoutManager.glyphRange(for: container)
+        drawEmphasis()
         if let highlight {
             NSColor.selectedTextBackgroundColor.setFill()
             let lineHeight = layoutManager.defaultLineHeight(for: font)
@@ -157,6 +176,23 @@ final class CodeLineNSView: NSView {
             let origin = NSPoint(x: end.maxX + 4, y: end.midY - size.height / 2)
             icon.draw(in: NSRect(origin: origin, size: size), from: .zero, operation: .sourceOver,
                       fraction: 1, respectFlipped: true, hints: nil)
+        }
+    }
+
+    /// Rounded marks behind the words that changed, like GitHub's darker inline highlight.
+    private func drawEmphasis() {
+        guard !emphasis.isEmpty else { return }
+        emphasisColor.setFill()
+        let length = storage.length
+        for range in emphasis {
+            let clamped = NSIntersectionRange(range, NSRange(location: 0, length: length))
+            guard clamped.length > 0 else { continue }
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: clamped, actualCharacterRange: nil)
+            layoutManager.enumerateEnclosingRects(forGlyphRange: glyphRange,
+                                                  withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                                  in: container) { rect, _ in
+                NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
+            }
         }
     }
 

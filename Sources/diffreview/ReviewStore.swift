@@ -22,6 +22,8 @@ struct DisplayFile: Identifiable {
     let language: String
     let gutterDigits: Int
     let anchors: Set<LineAnchor>
+    /// Word-level changes per line index: what differs from the paired deleted/added line.
+    let emphasis: [Int: [NSRange]]
 
     var path: String { diff.path }
 
@@ -30,8 +32,12 @@ struct DisplayFile: Identifiable {
         self.diff = diff
         var lines: [DiffLine] = []
         var rows: [DisplayRow] = []
+        var emphasis: [Int: [NSRange]] = [:]
         for hunk in diff.hunks {
             rows.append(DisplayRow(id: rows.count, kind: .hunkHeader(hunk.header)))
+            for (index, ranges) in InlineDiff.emphasis(for: hunk.lines) {
+                emphasis[lines.count + index] = ranges
+            }
             for line in hunk.lines {
                 rows.append(DisplayRow(id: rows.count, kind: .line(lines.count)))
                 lines.append(line)
@@ -39,6 +45,7 @@ struct DisplayFile: Identifiable {
         }
         self.lines = lines
         self.rows = rows
+        self.emphasis = emphasis
         language = Language.fenceName(forPath: diff.path)
         let maxLine = diff.hunks.map { max($0.oldStart + $0.oldCount, $0.newStart + $0.newCount) }.max() ?? 1
         gutterDigits = max(3, String(maxLine).count)

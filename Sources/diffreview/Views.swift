@@ -2,13 +2,28 @@ import AppKit
 import DiffReviewCore
 import SwiftUI
 
+/// GitHub's diff colours (Primer): each kind of row has a code colour and a stronger
+/// line-number colour.
 enum Palette {
-    static let addBG = Color(nsColor: NSColor(name: nil) { $0.isDark ? NSColor(red: 0.18, green: 0.32, blue: 0.20, alpha: 0.55) : NSColor(red: 0.90, green: 0.98, blue: 0.91, alpha: 1) })
-    static let delBG = Color(nsColor: NSColor(name: nil) { $0.isDark ? NSColor(red: 0.40, green: 0.17, blue: 0.18, alpha: 0.55) : NSColor(red: 1.0, green: 0.92, blue: 0.92, alpha: 1) })
-    static let addGutter = Color(nsColor: NSColor(name: nil) { $0.isDark ? NSColor(red: 0.18, green: 0.40, blue: 0.22, alpha: 0.6) : NSColor(red: 0.80, green: 0.95, blue: 0.82, alpha: 1) })
-    static let delGutter = Color(nsColor: NSColor(name: nil) { $0.isDark ? NSColor(red: 0.50, green: 0.20, blue: 0.21, alpha: 0.6) : NSColor(red: 1.0, green: 0.84, blue: 0.85, alpha: 1) })
-    static let hunkBG = Color(nsColor: NSColor(name: nil) { $0.isDark ? NSColor(red: 0.16, green: 0.22, blue: 0.33, alpha: 0.7) : NSColor(red: 0.87, green: 0.93, blue: 1.0, alpha: 1) })
-    static let selected = Color.yellow.opacity(0.28)
+    private static func dynamic(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { $0.isDark ? dark : light })
+    }
+    private static func rgb(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255,
+                blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
+    }
+
+    static let addBG = dynamic(light: rgb(0xE6FFEC), dark: rgb(0x2EA043, 0.15))
+    static let addGutter = dynamic(light: rgb(0xCCFFD8), dark: rgb(0x3FB950, 0.3))
+    static let delBG = dynamic(light: rgb(0xFFEBE9), dark: rgb(0xF85149, 0.1))
+    static let delGutter = dynamic(light: rgb(0xFFD7D5), dark: rgb(0xF85149, 0.3))
+    static let hunkBG = dynamic(light: rgb(0xDDF4FF), dark: rgb(0x388BFD, 0.1))
+    static let hunkGutter = dynamic(light: rgb(0xB6E3FF), dark: rgb(0x388BFD, 0.3))
+    static let selectedBG = dynamic(light: rgb(0xFFF8C5), dark: rgb(0xBB8009, 0.15))
+    static let selectedGutter = dynamic(light: rgb(0xF8E3A1), dark: rgb(0xBB8009, 0.4))
+    static let commentButton = dynamic(light: rgb(0x0969DA), dark: rgb(0x1F6FEB))
+    static let addWord = NSColor(name: nil) { $0.isDark ? rgb(0x2EA043, 0.4) : rgb(0xABF2BC) }
+    static let delWord = NSColor(name: nil) { $0.isDark ? rgb(0xF85149, 0.4) : rgb(0xFFCECB) }
     static let added = Color(nsColor: .systemGreen)
     static let deleted = Color(nsColor: .systemRed)
 }
@@ -115,17 +130,95 @@ struct FinishReviewView: View {
 struct FileListView: View {
     @Bindable var store: ReviewStore
     @State private var selected: Int?
+    @State private var filter = ""
+    /// Folder paths the user has folded.
+    @State private var collapsedFolders: Set<String> = []
 
     var body: some View {
-        List(selection: $selected) {
-            ForEach(store.files) { file in
-                FileListRow(file: file, comments: store.commentCounts[file.path] ?? 0)
-                    .tag(file.id)
+        let query = filter.trimmingCharacters(in: .whitespaces)
+        let shown = query.isEmpty ? store.files
+            : store.files.filter { $0.path.localizedCaseInsensitiveContains(query) }
+        VStack(spacing: 0) {
+            FilterField(text: $filter)
+                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
+            List(selection: $selected) {
+                FileTreeRows(nodes: FileTree.build(paths: shown.map(\.path)), files: shown,
+                             commentCounts: store.commentCounts,
+                             // While filtering, show every match.
+                             expandAll: !query.isEmpty,
+                             collapsed: $collapsedFolders)
+            }
+            .listStyle(.sidebar)
+            .overlay {
+                if shown.isEmpty {
+                    Text("No matching files").font(.callout).foregroundStyle(.secondary)
+                }
             }
         }
-        .listStyle(.sidebar)
         .onChange(of: selected) { _, id in
             if let id { store.reveal(fileID: id) }
+        }
+    }
+}
+
+struct FilterField: View {
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Filter files…", text: $text)
+                .textFieldStyle(.plain)
+                .onKeyPress(.escape) {
+                    text = ""
+                    return .handled
+                }
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 7).padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor).opacity(0.6)))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+    }
+}
+
+/// The folder tree, GitHub-style: folders fold, files are selectable rows.
+struct FileTreeRows: View {
+    let nodes: [FileTreeNode]
+    let files: [DisplayFile]
+    let commentCounts: [String: Int]
+    let expandAll: Bool
+    @Binding var collapsed: Set<String>
+
+    var body: some View {
+        ForEach(nodes) { node in
+            switch node {
+            case .directory(let name, let path, let children):
+                DisclosureGroup(isExpanded: Binding(
+                    get: { expandAll || !collapsed.contains(path) },
+                    set: { expanded in
+                        if expanded { collapsed.remove(path) } else { collapsed.insert(path) }
+                    }
+                )) {
+                    FileTreeRows(nodes: children, files: files, commentCounts: commentCounts,
+                                 expandAll: expandAll, collapsed: $collapsed)
+                } label: {
+                    Label {
+                        Text(name).lineLimit(1).truncationMode(.head)
+                    } icon: {
+                        Image(systemName: "folder.fill").foregroundStyle(.blue)
+                    }
+                    .help(path)
+                }
+            case .file(_, _, let index):
+                let file = files[index]
+                FileListRow(file: file, comments: commentCounts[file.path] ?? 0)
+                    .tag(file.id)
+            }
         }
     }
 }
@@ -135,16 +228,9 @@ struct FileListRow: View {
     let comments: Int
 
     var body: some View {
-        let path = file.path as NSString
         HStack(spacing: 6) {
             StatusBadge(file: file.diff)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(path.lastPathComponent).lineLimit(1).truncationMode(.middle)
-                let dir = path.deletingLastPathComponent
-                if !dir.isEmpty {
-                    Text(dir).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-                }
-            }
+            Text((file.path as NSString).lastPathComponent).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 4)
             if comments > 0 {
                 Label(String(comments), systemImage: "text.bubble")
@@ -354,6 +440,10 @@ struct Notice: View {
 }
 
 @MainActor func gutterWidth(_ digits: Int) -> CGFloat { CGFloat(digits) * CodeFontSettings.shared.digitWidth + 14 }
+/// Both line-number columns, each with its trailing padding.
+@MainActor func gutterTotalWidth(_ digits: Int) -> CGFloat { (gutterWidth(digits) + 4) * 2 }
+private let markerWidth: CGFloat = 16
+private let rowPadding: CGFloat = 2
 
 struct HunkHeaderRow: View {
     let header: String
@@ -361,15 +451,15 @@ struct HunkHeaderRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Color.clear.frame(width: gutterWidth(digits) * 2 + 16)
+            Color.clear.frame(width: gutterTotalWidth(digits) + markerWidth)
             Text(header)
                 .font(codeFont)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .padding(.vertical, 3)
+                .padding(.vertical, 4)
             Spacer(minLength: 0)
         }
-        .background(Palette.hunkBG)
+        .background(RowBackground(digits: digits, gutter: Palette.hunkGutter, code: Palette.hunkBG))
     }
 }
 
@@ -392,6 +482,8 @@ struct LineBlock: View {
                     font: CodeFontSettings.shared.nsFont,
                     fileID: file.id, lineIndex: index,
                     highlight: store.highlight(fileID: file.id, lineIndex: index),
+                    emphasis: file.emphasis[index] ?? [],
+                    emphasisColor: line.kind == .deletion ? Palette.delWord : Palette.addWord,
                     noNewlineAtEnd: line.noNewlineAtEnd,
                     onClick: { extend in store.click(fileID: file.id, lineIndex: index, extend: extend) },
                     onDragBegin: { offset in store.beginTextSelection(fileID: file.id, lineIndex: index, offset: offset) },
@@ -431,6 +523,7 @@ struct LineRow<Code: View>: View {
     let selected: Bool
     let onClick: (_ extend: Bool) -> Void
     @ViewBuilder let code: () -> Code
+    @State private var hovering = false
 
     var body: some View {
         let (marker, bg, gutterBG): (String, Color, Color) = {
@@ -446,24 +539,72 @@ struct LineRow<Code: View>: View {
                 Text(line.oldNumber.map(String.init) ?? "")
                     .frame(width: gutterWidth(digits), alignment: .trailing)
                     .padding(.trailing, 4)
-                    .foregroundStyle(.secondary)
                 Text(line.newNumber.map(String.init) ?? "")
                     .frame(width: gutterWidth(digits), alignment: .trailing)
                     .padding(.trailing, 4)
-                    .foregroundStyle(.secondary)
-                    .background(gutterBG)
-                Text(marker)
-                    .frame(width: 16)
-                    .foregroundStyle(.secondary)
             }
-            .font(codeFont)
+            .foregroundStyle(.secondary)
             .contentShape(Rectangle())
             .onTapGesture { onClick(NSEvent.modifierFlags.contains(.shift)) }
+            Text(marker)
+                .frame(width: markerWidth)
             code()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.vertical, 1)
-        .background(selected ? Palette.selected : bg)
+        .font(codeFont)
+        .padding(.vertical, rowPadding)
+        .background(RowBackground(digits: digits,
+                                  gutter: selected ? Palette.selectedGutter : gutterBG,
+                                  code: selected ? Palette.selectedBG : bg))
+        .overlay(alignment: .topLeading) {
+            if hovering {
+                AddCommentButton { onClick(NSEvent.modifierFlags.contains(.shift)) }
+                    .offset(x: gutterTotalWidth(digits) - 4, y: rowPadding - 1)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
+        }
+        .onHover { inside in
+            withAnimation(.easeOut(duration: 0.1)) { hovering = inside }
+        }
+    }
+}
+
+/// A row's two-tone background: the line-number gutter, then the code.
+struct RowBackground: View {
+    let digits: Int
+    let gutter: Color
+    let code: Color
+
+    var body: some View {
+        HStack(spacing: 0) {
+            gutter.frame(width: gutterTotalWidth(digits))
+            code
+        }
+    }
+}
+
+/// The blue "+" that appears on a hovered line, as on GitHub.
+struct AddCommentButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        let side = ceil(CodeFontSettings.shared.lineHeight) + 2
+        Button(action: action) {
+            Image(systemName: "plus")
+                .font(.system(size: side * 0.55, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: side, height: side)
+                .background(RoundedRectangle(cornerRadius: 5).fill(Palette.commentButton))
+                .shadow(color: .black.opacity(0.2), radius: 1, y: 0.5)
+                .scaleEffect(hovering ? 1.15 : 1)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            withAnimation(.easeOut(duration: 0.1)) { hovering = inside }
+        }
+        .help("Add a comment on this line (shift-click to extend)")
     }
 }
 

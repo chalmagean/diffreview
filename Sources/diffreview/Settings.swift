@@ -19,24 +19,27 @@ final class CodeFontSettings {
     private(set) var font: Font
     /// Width of one digit, for sizing the line-number gutters.
     private(set) var digitWidth: CGFloat
+    /// Height of one line of code, for sizing controls that sit on a diff row.
+    private(set) var lineHeight: CGFloat
 
     private init() {
         let preference = FontPreference.load()
         self.preference = preference
-        (nsFont, font, digitWidth) = Self.make(preference)
+        (nsFont, font, digitWidth, lineHeight) = Self.make(preference)
     }
 
     private func resolve() {
-        (nsFont, font, digitWidth) = Self.make(preference)
+        (nsFont, font, digitWidth, lineHeight) = Self.make(preference)
     }
 
-    private static func make(_ preference: FontPreference) -> (NSFont, Font, CGFloat) {
+    private static func make(_ preference: FontPreference) -> (NSFont, Font, CGFloat, CGFloat) {
         let size = CGFloat(preference.size)
         let nsFont = preference.family.flatMap {
             NSFontManager.shared.font(withFamily: $0, traits: [], weight: 5, size: size)
         } ?? .monospacedSystemFont(ofSize: size, weight: .regular)
         let digitWidth = ("0" as NSString).size(withAttributes: [.font: nsFont]).width
-        return (nsFont, Font(nsFont as CTFont), digitWidth)
+        let lineHeight = NSLayoutManager().defaultLineHeight(for: nsFont)
+        return (nsFont, Font(nsFont as CTFont), digitWidth, lineHeight)
     }
 
     /// Installed fixed-pitch font families, by name.
