@@ -17,7 +17,8 @@ extension NSAppearance {
     var isDark: Bool { bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
 }
 
-let codeFont = Font.system(size: 12, design: .monospaced)
+/// The code font chosen in Settings. Reading it from a view body makes that view follow changes.
+@MainActor var codeFont: Font { CodeFontSettings.shared.font }
 
 // MARK: - Root
 
@@ -352,7 +353,7 @@ struct Notice: View {
     }
 }
 
-func gutterWidth(_ digits: Int) -> CGFloat { CGFloat(digits) * 7.3 + 14 }
+@MainActor func gutterWidth(_ digits: Int) -> CGFloat { CGFloat(digits) * CodeFontSettings.shared.digitWidth + 14 }
 
 struct HunkHeaderRow: View {
     let header: String
@@ -388,6 +389,7 @@ struct LineBlock: View {
                     onClick: { extend in store.click(fileID: file.id, lineIndex: index, extend: extend) }) {
                 CodeLineView(
                     code: store.highlighter.highlight(codeText(line.text), language: file.language),
+                    font: CodeFontSettings.shared.nsFont,
                     fileID: file.id, lineIndex: index,
                     highlight: store.highlight(fileID: file.id, lineIndex: index),
                     noNewlineAtEnd: line.noNewlineAtEnd,

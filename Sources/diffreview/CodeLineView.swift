@@ -1,12 +1,11 @@
 import AppKit
 import SwiftUI
 
-let codeNSFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-
 /// The code part of one diff line, drawn with TextKit so text can be selected by dragging,
 /// across lines too. A click without a drag is reported as a line click.
 struct CodeLineView: NSViewRepresentable {
     let code: AttributedString
+    let font: NSFont
     let fileID: Int
     let lineIndex: Int
     let highlight: LineHighlight?
@@ -29,7 +28,7 @@ struct CodeLineView: NSViewRepresentable {
         view.onDragBegin = onDragBegin
         view.onDragMove = onDragMove
         view.onDragEnd = onDragEnd
-        view.configure(code: code, highlight: highlight, noNewlineAtEnd: noNewlineAtEnd)
+        view.configure(code: code, font: font, highlight: highlight, noNewlineAtEnd: noNewlineAtEnd)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: CodeLineNSView, context: Context) -> CGSize? {
@@ -50,6 +49,7 @@ final class CodeLineNSView: NSView {
     private let layoutManager = NSLayoutManager()
     private let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
     private var code: AttributedString?
+    private var font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
     private var highlight: LineHighlight?
     private var noNewlineAtEnd = false
     private var mouseDownLocation: NSPoint?
@@ -72,11 +72,12 @@ final class CodeLineNSView: NSView {
 
     override var isFlipped: Bool { true }
 
-    func configure(code: AttributedString, highlight: LineHighlight?, noNewlineAtEnd: Bool) {
-        if code != self.code || noNewlineAtEnd != self.noNewlineAtEnd {
+    func configure(code: AttributedString, font: NSFont, highlight: LineHighlight?, noNewlineAtEnd: Bool) {
+        if code != self.code || font != self.font || noNewlineAtEnd != self.noNewlineAtEnd {
             self.code = code
+            self.font = font
             self.noNewlineAtEnd = noNewlineAtEnd
-            storage.setAttributedString(Self.attributed(code))
+            storage.setAttributedString(Self.attributed(code, font: font))
             needsDisplay = true
             invalidateIntrinsicContentSize()
         }
@@ -87,13 +88,13 @@ final class CodeLineNSView: NSView {
         toolTip = noNewlineAtEnd ? "No newline at end of file" : nil
     }
 
-    private static func attributed(_ code: AttributedString) -> NSAttributedString {
+    private static func attributed(_ code: AttributedString, font: NSFont) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.tabStops = []
-        paragraph.defaultTabInterval = 4 * (" " as NSString).size(withAttributes: [.font: codeNSFont]).width
+        paragraph.defaultTabInterval = 4 * (" " as NSString).size(withAttributes: [.font: font]).width
         let text = String(code.characters)
         let result = NSMutableAttributedString(string: text, attributes: [
-            .font: codeNSFont, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph,
+            .font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph,
         ])
         // Keep colours from a syntax highlighter (AppKit or SwiftUI attributes).
         for run in code.runs {
@@ -125,7 +126,7 @@ final class CodeLineNSView: NSView {
 
     func height(forWidth width: CGFloat) -> CGFloat {
         layout(width: width)
-        let lineHeight = layoutManager.defaultLineHeight(for: codeNSFont)
+        let lineHeight = layoutManager.defaultLineHeight(for: font)
         return max(lineHeight, ceil(layoutManager.usedRect(for: container).height))
     }
 
@@ -134,7 +135,7 @@ final class CodeLineNSView: NSView {
         let glyphs = layoutManager.glyphRange(for: container)
         if let highlight {
             NSColor.selectedTextBackgroundColor.setFill()
-            let lineHeight = layoutManager.defaultLineHeight(for: codeNSFont)
+            let lineHeight = layoutManager.defaultLineHeight(for: font)
             if highlight.range.length > 0 {
                 let selected = layoutManager.glyphRange(forCharacterRange: highlight.range, actualCharacterRange: nil)
                 layoutManager.enumerateEnclosingRects(forGlyphRange: selected,
@@ -151,7 +152,7 @@ final class CodeLineNSView: NSView {
         }
         layoutManager.drawGlyphs(forGlyphRange: glyphs, at: .zero)
         if noNewlineAtEnd, let icon = Self.noNewlineIcon {
-            let end = endOfTextRect(lineHeight: layoutManager.defaultLineHeight(for: codeNSFont))
+            let end = endOfTextRect(lineHeight: layoutManager.defaultLineHeight(for: font))
             let size = icon.size
             let origin = NSPoint(x: end.maxX + 4, y: end.midY - size.height / 2)
             icon.draw(in: NSRect(origin: origin, size: size), from: .zero, operation: .sourceOver,

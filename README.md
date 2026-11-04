@@ -24,6 +24,15 @@ swift build -c release
 install -m 755 .build/release/diffreview ~/.local/bin/diffreview   # or any directory on your PATH
 ```
 
+### Updating
+
+After pulling or changing the code, rebuild and reinstall from the repo:
+
+```sh
+swift build -c release
+install -m 755 .build/release/diffreview ~/.local/bin/diffreview   # same directory as before
+```
+
 ## Usage
 
 ```sh
@@ -50,6 +59,7 @@ Uncommitted changes are not included in that mode.
 - **Comment on file** (in each file header) adds a file-level comment.
 - **Finish review** (⌘⇧↩) opens the summary box and the **Submit review** button.
 - Files can be collapsed. Files with more than 1,500 changed lines start collapsed.
+- **Settings…** (⌘,) picks the code font (any installed monospaced family, or the system SF Mono) and its size. The choice is remembered.
 
 Drafts are saved automatically to `.git/diffreview/comments.json`, so closing the
 window doesn't lose work: the next run picks up where you left off. The file is

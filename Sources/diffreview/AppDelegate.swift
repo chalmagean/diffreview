@@ -5,6 +5,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let store: ReviewStore
     var window: NSWindow!
+    private var settingsWindow: NSWindow?
 
     init(store: ReviewStore) {
         self.store = store
@@ -58,11 +59,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func closeReview(_ sender: Any?) { cancel() }
 
+    @objc func showSettings(_ sender: Any?) {
+        if settingsWindow == nil {
+            let settings = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
+            settings.title = "Settings"
+            settings.styleMask = [.titled, .closable]
+            settings.isReleasedWhenClosed = false
+            settings.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+            settings.center()
+            settingsWindow = settings
+        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
     private func makeMainMenu() -> NSMenu {
         let main = NSMenu()
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
+        let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",")
+        settings.target = self
+        appMenu.addItem(settings)
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide diffreview", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit Without Submitting", action: #selector(closeReview(_:)), keyEquivalent: "q")
