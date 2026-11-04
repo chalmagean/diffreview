@@ -141,22 +141,31 @@ struct FileListView: View {
         VStack(spacing: 0) {
             FilterField(text: $filter)
                 .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
-            List(selection: $selected) {
-                FileTreeRows(nodes: FileTree.build(paths: shown.map(\.path)), files: shown,
-                             commentCounts: store.commentCounts,
-                             // While filtering, show every match.
-                             expandAll: !query.isEmpty,
-                             collapsed: $collapsedFolders)
-            }
-            .listStyle(.sidebar)
-            .overlay {
-                if shown.isEmpty {
-                    Text("No matching files").font(.callout).foregroundStyle(.secondary)
+            ScrollViewReader { proxy in
+                List(selection: $selected) {
+                    FileTreeRows(nodes: FileTree.build(paths: shown.map(\.path)), files: shown,
+                                 commentCounts: store.commentCounts,
+                                 // While filtering, show every match.
+                                 expandAll: !query.isEmpty,
+                                 collapsed: $collapsedFolders)
+                }
+                .listStyle(.sidebar)
+                .overlay {
+                    if shown.isEmpty {
+                        Text("No matching files").font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                // Follow the diff as it scrolls, keeping the highlighted row in view.
+                .onChange(of: store.visibleFileID) { _, id in
+                    guard let id, id != selected else { return }
+                    selected = id
+                    proxy.scrollTo(id)
                 }
             }
         }
         .onChange(of: selected) { _, id in
-            if let id { store.reveal(fileID: id) }
+            // Only clicks jump; a selection that followed the scroll is already there.
+            if let id, id != store.visibleFileID { store.reveal(fileID: id) }
         }
     }
 }
@@ -218,6 +227,7 @@ struct FileTreeRows: View {
                 let file = files[index]
                 FileListRow(file: file, comments: commentCounts[file.path] ?? 0)
                     .tag(file.id)
+                    .id(file.id)
             }
         }
     }
@@ -285,6 +295,9 @@ struct DiffCounts: View {
 struct DiffView: View {
     @Bindable var store: ReviewStore
 
+    /// The scroll view's visible frame, for telling which file is at the top.
+    static let coordinateSpace = "diff-viewport"
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
@@ -299,6 +312,7 @@ struct DiffView: View {
                 }
                 .padding(.bottom, 40)
             }
+            .coordinateSpace(.named(Self.coordinateSpace))
             .onChange(of: store.scrollRequest) { _, request in
                 guard let request else { return }
                 // LazyVStack only estimates the height of rows it hasn't built, so a long jump
@@ -380,8 +394,13 @@ struct FileBody: View {
     var body: some View {
         // Always present (even when collapsed) so it can serve as the scroll target.
         FileTopRow(store: store, file: file)
-
             .id(Self.scrollID(file.id))
+            .onGeometryChange(for: Double.self) { proxy in
+                Double(proxy.frame(in: .named(DiffView.coordinateSpace)).minY)
+            } action: { y in
+                store.fileTopMoved(file.id, to: y)
+            }
+            .onDisappear { store.fileTopMoved(file.id, to: nil) }
 
         if !store.collapsed.contains(file.id) {
             ForEach(file.rows) { row in

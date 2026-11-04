@@ -108,11 +108,21 @@ final class ReviewStore {
     var editingID: UUID?
     var editText = ""
     var scrollRequest: ScrollRequest?
+    /// The file the diff is scrolled to, highlighted in the sidebar.
+    private(set) var visibleFileID: Int?
 
     struct ScrollRequest: Equatable {
         let fileID: Int
         let token = UUID()
     }
+
+    /// file id → y of its first row in the diff viewport, for the files currently built.
+    @ObservationIgnored private var fileTops: [Int: Double] = [:]
+    /// A jump from the sidebar keeps its file highlighted while the scroll settles, even
+    /// when that file can't reach the top (e.g. the last file of the diff).
+    @ObservationIgnored private var followScrollAfter = Date.distantPast
+    /// Just below the pinned file header.
+    private static let visibleFileThreshold: Double = 48
 
     /// path → anchor → comments displayed under that row.
     private(set) var lineComments: [String: [LineAnchor: [ReviewComment]]] = [:]
@@ -321,7 +331,19 @@ final class ReviewStore {
     }
 
     func reveal(fileID: Int) {
+        visibleFileID = fileID
+        // Covers the re-issued scrolls in DiffView.
+        followScrollAfter = Date().addingTimeInterval(0.6)
         scrollRequest = ScrollRequest(fileID: fileID)
+    }
+
+    /// A file's first row moved in the diff viewport (`nil` once it's no longer built).
+    func fileTopMoved(_ fileID: Int, to y: Double?) {
+        fileTops[fileID] = y
+        guard Date() >= followScrollAfter,
+              let current = VisibleFile.current(tops: fileTops, threshold: Self.visibleFileThreshold),
+              current != visibleFileID else { return }
+        visibleFileID = current
     }
 
     // MARK: - Persistence & submit
