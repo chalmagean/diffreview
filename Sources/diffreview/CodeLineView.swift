@@ -61,6 +61,10 @@ final class CodeLineNSView: NSView {
     private var mouseDownLocation: NSPoint?
     private var mouseDownOffset = 0
     private var dragging = false
+    /// Width of the text on one unwrapped line. Narrower than this, the line wraps.
+    private var unwrappedWidth: CGFloat = 0
+    /// The last width asked about and its height, as SwiftUI asks several times per layout.
+    private var measured: (width: CGFloat, height: CGFloat)?
 
     private static let iconWidth: CGFloat = 16
     private static let noNewlineIcon = NSImage(systemSymbolName: "nosign", accessibilityDescription: "No newline at end of file")?
@@ -72,6 +76,10 @@ final class CodeLineNSView: NSView {
         container.lineFragmentPadding = 0
         layoutManager.addTextContainer(container)
         storage.addLayoutManager(layoutManager)
+        // Resizing shouldn't redraw every line each frame: the text stays where it is unless
+        // it wraps differently (see setFrameSize).
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        layerContentsPlacement = .topLeft
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -84,6 +92,10 @@ final class CodeLineNSView: NSView {
             self.font = font
             self.noNewlineAtEnd = noNewlineAtEnd
             storage.setAttributedString(Self.attributed(code, font: font))
+            container.size = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            layoutManager.ensureLayout(for: container)
+            unwrappedWidth = ceil(layoutManager.usedRect(for: container).width)
+            measured = nil
             needsDisplay = true
             invalidateIntrinsicContentSize()
         }
@@ -130,8 +142,13 @@ final class CodeLineNSView: NSView {
 
     private var textWidthLimit: CGFloat { noNewlineAtEnd ? Self.iconWidth : 0 }
 
+    private func wraps(atWidth width: CGFloat) -> Bool {
+        width - textWidthLimit < unwrappedWidth
+    }
+
+    /// Lines that fit keep one fixed container width, so resizing doesn't throw their layout away.
     private func layout(width: CGFloat) {
-        let w = max(1, width - textWidthLimit)
+        let w = wraps(atWidth: width) ? max(1, width - textWidthLimit) : unwrappedWidth + 1
         if container.size.width != w {
             container.size = NSSize(width: w, height: CGFloat.greatestFiniteMagnitude)
         }
@@ -139,13 +156,25 @@ final class CodeLineNSView: NSView {
     }
 
     var naturalWidth: CGFloat {
-        ceil(storage.size().width) + textWidthLimit
+        unwrappedWidth + textWidthLimit
     }
 
     func height(forWidth width: CGFloat) -> CGFloat {
-        layout(width: width)
         let lineHeight = layoutManager.defaultLineHeight(for: font)
-        return max(lineHeight, ceil(layoutManager.usedRect(for: container).height))
+        guard wraps(atWidth: width) else { return lineHeight }
+        if let measured, measured.width == width { return measured.height }
+        layout(width: width)
+        let height = max(lineHeight, ceil(layoutManager.usedRect(for: container).height))
+        measured = (width, height)
+        return height
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let old = frame.size
+        super.setFrameSize(newSize)
+        if newSize.height != old.height || wraps(atWidth: newSize.width) || wraps(atWidth: old.width) {
+            needsDisplay = true
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
