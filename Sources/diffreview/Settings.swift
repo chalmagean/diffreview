@@ -51,12 +51,46 @@ final class CodeFontSettings {
     }()
 }
 
+/// The live light/dark choice. Setting it restyles every window at once.
+@MainActor @Observable
+final class AppearanceSettings {
+    static let shared = AppearanceSettings()
+
+    var preference: AppearancePreference {
+        didSet {
+            guard preference != oldValue else { return }
+            preference.save()
+            apply()
+        }
+    }
+
+    private init() {
+        preference = AppearancePreference.load()
+    }
+
+    /// Pushes the preference onto the app; nil makes it follow the system again.
+    func apply() {
+        NSApp.appearance = switch preference {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
 struct SettingsView: View {
     @Bindable var settings = CodeFontSettings.shared
+    @Bindable var appearance = AppearanceSettings.shared
 
     var body: some View {
         let preference = settings.preference
         Form {
+            Picker("Appearance", selection: $appearance.preference) {
+                ForEach(AppearancePreference.allCases, id: \.self) { option in
+                    Text(option.title).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
             Picker("Code font", selection: Binding(
                 get: { preference.family },
                 set: { settings.preference = FontPreference(family: $0, size: preference.size) }
@@ -83,8 +117,11 @@ struct SettingsView: View {
             }
             HStack {
                 Spacer()
-                Button("Restore Defaults") { settings.preference = .default }
-                    .disabled(preference == .default)
+                Button("Restore Defaults") {
+                    settings.preference = .default
+                    appearance.preference = .default
+                }
+                .disabled(preference == .default && appearance.preference == .default)
             }
         }
         .formStyle(.grouped)
