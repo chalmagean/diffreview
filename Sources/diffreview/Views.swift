@@ -129,7 +129,6 @@ struct FinishReviewView: View {
 
 struct FileListView: View {
     @Bindable var store: ReviewStore
-    @State private var selected: Int?
     @State private var filter = ""
     /// Folder paths the user has folded.
     @State private var collapsedFolders: Set<String> = []
@@ -142,9 +141,17 @@ struct FileListView: View {
             FilterField(text: $filter)
                 .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
             ScrollViewReader { proxy in
-                List(selection: $selected) {
+                // The highlight is the file the diff shows. Only user input (keyboard) goes
+                // through the setter, so following the scroll can never trigger a jump.
+                List(selection: Binding(
+                    get: { store.visibleFileID },
+                    set: { id in if let id, id != store.visibleFileID { store.reveal(fileID: id) } }
+                )) {
                     FileTreeRows(nodes: FileTree.build(paths: shown.map(\.path)), files: shown,
                                  commentCounts: store.commentCounts,
+                                 // Clicking the highlighted row doesn't change the selection,
+                                 // but should still jump back to the top of that file.
+                                 onClick: { store.reveal(fileID: $0) },
                                  // While filtering, show every match.
                                  expandAll: !query.isEmpty,
                                  collapsed: $collapsedFolders)
@@ -157,15 +164,9 @@ struct FileListView: View {
                 }
                 // Follow the diff as it scrolls, keeping the highlighted row in view.
                 .onChange(of: store.visibleFileID) { _, id in
-                    guard let id, id != selected else { return }
-                    selected = id
-                    proxy.scrollTo(id)
+                    if let id { proxy.scrollTo(id) }
                 }
             }
-        }
-        .onChange(of: selected) { _, id in
-            // Only clicks jump; a selection that followed the scroll is already there.
-            if let id, id != store.visibleFileID { store.reveal(fileID: id) }
         }
     }
 }
@@ -200,6 +201,7 @@ struct FileTreeRows: View {
     let nodes: [FileTreeNode]
     let files: [DisplayFile]
     let commentCounts: [String: Int]
+    let onClick: (Int) -> Void
     let expandAll: Bool
     @Binding var collapsed: Set<String>
 
@@ -214,7 +216,7 @@ struct FileTreeRows: View {
                     }
                 )) {
                     FileTreeRows(nodes: children, files: files, commentCounts: commentCounts,
-                                 expandAll: expandAll, collapsed: $collapsed)
+                                 onClick: onClick, expandAll: expandAll, collapsed: $collapsed)
                 } label: {
                     Label {
                         Text(name).lineLimit(1).truncationMode(.head)
@@ -226,6 +228,9 @@ struct FileTreeRows: View {
             case .file(_, _, let index):
                 let file = files[index]
                 FileListRow(file: file, comments: commentCounts[file.path] ?? 0)
+                    .contentShape(Rectangle())
+                    // Simultaneous so the List still handles selection and focus.
+                    .simultaneousGesture(TapGesture().onEnded { onClick(file.id) })
                     .tag(file.id)
                     .id(file.id)
             }
@@ -302,7 +307,7 @@ struct DiffView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    ForEach(store.files) { file in
+                    ForEach(store.files, id: \.sectionID) { file in
                         Section {
                             FileBody(store: store, file: file)
                         } header: {
@@ -315,14 +320,24 @@ struct DiffView: View {
             .coordinateSpace(.named(Self.coordinateSpace))
             .onChange(of: store.scrollRequest) { _, request in
                 guard let request else { return }
-                // LazyVStack only estimates the height of rows it hasn't built, so a long jump
-                // lands short. Re-issuing the scroll as rows materialise converges on the target.
-                let id = FileBody.scrollID(request.fileID)
-                proxy.scrollTo(id, anchor: .top)
+                // A LazyVStack can only find a row it hasn't built by its ForEach identity:
+                // the `.id` on a file's first row doesn't exist until that row is built, and
+                // scrolling to it before then silently does nothing. So head for the file's
+                // section first, then, once its first row exists, for that row (it sits below
+                // the pinned header). Unbuilt rows only have estimated heights, so a long jump
+                // lands short; re-issuing the scroll as rows materialise converges on the target.
+                let scroll = {
+                    if store.isFileTopBuilt(request.fileID) {
+                        proxy.scrollTo(FileBody.scrollID(request.fileID), anchor: .top)
+                    } else {
+                        proxy.scrollTo(DisplayFile.sectionID(request.fileID), anchor: .top)
+                    }
+                }
+                scroll()
                 for delay in [0.05, 0.15, 0.3, 0.5] {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         guard store.scrollRequest == request else { return }
-                        proxy.scrollTo(id, anchor: .top)
+                        scroll()
                     }
                 }
             }

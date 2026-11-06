@@ -33,6 +33,9 @@ swift build -c release
 install -m 755 .build/release/diffreview ~/.local/bin/diffreview   # same directory as before
 ```
 
+**diffreview → About diffreview** shows the version and when the running binary was built,
+so you can tell whether you're on the latest build.
+
 ## Usage
 
 ```sh

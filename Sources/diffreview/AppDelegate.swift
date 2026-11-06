@@ -60,6 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func closeReview(_ sender: Any?) { cancel() }
 
+    @objc func showAbout(_ sender: Any?) { AppInfo.showAboutPanel() }
+
     @objc func showSettings(_ sender: Any?) {
         if settingsWindow == nil {
             let settings = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
@@ -78,6 +80,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
+        let about = NSMenuItem(title: "About diffreview", action: #selector(showAbout(_:)), keyEquivalent: "")
+        about.target = self
+        appMenu.addItem(about)
+        appMenu.addItem(.separator())
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",")
         settings.target = self
         appMenu.addItem(settings)

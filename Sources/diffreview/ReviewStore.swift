@@ -26,6 +26,10 @@ struct DisplayFile: Identifiable {
     let emphasis: [Int: [NSRange]]
 
     var path: String { diff.path }
+    /// Identity of this file's section in the diff. A String, so a scroll to it can't match a
+    /// `DisplayRow` (whose ids are Ints numbered within each file).
+    var sectionID: String { Self.sectionID(id) }
+    static func sectionID(_ fileID: Int) -> String { "file-section-\(fileID)" }
 
     init(id: Int, diff: FileDiff) {
         self.id = id
@@ -329,6 +333,9 @@ final class ReviewStore {
     func setAllCollapsed(_ value: Bool) {
         collapsed = value ? Set(files.map(\.id)) : []
     }
+
+    /// Whether a file's first row is currently built in the diff (only then can it be scrolled to).
+    func isFileTopBuilt(_ fileID: Int) -> Bool { fileTops[fileID] != nil }
 
     func reveal(fileID: Int) {
         visibleFileID = fileID
