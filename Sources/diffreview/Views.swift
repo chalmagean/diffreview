@@ -326,6 +326,8 @@ struct DiffView: View {
                 // section first, then, once its first row exists, for that row (it sits below
                 // the pinned header). Unbuilt rows only have estimated heights, so a long jump
                 // lands short; re-issuing the scroll as rows materialise converges on the target.
+                // Each scroll walks the diff up to the target, so stop once it has landed.
+                var lastTop: Double?
                 let scroll = {
                     if store.isFileTopBuilt(request.fileID) {
                         proxy.scrollTo(FileBody.scrollID(request.fileID), anchor: .top)
@@ -337,6 +339,9 @@ struct DiffView: View {
                 for delay in [0.05, 0.15, 0.3, 0.5] {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         guard store.scrollRequest == request else { return }
+                        let top = store.fileTop(request.fileID)
+                        if ScrollSettle.isSettled(top: top, previousTop: lastTop) { return }
+                        lastTop = top
                         scroll()
                     }
                 }
@@ -399,7 +404,7 @@ struct Tag: View {
     }
 }
 
-/// Everything below a file's header. Each top-level view is one List row.
+/// Everything below a file's header: its top row, then its rows in chunks.
 struct FileBody: View {
     @Bindable var store: ReviewStore
     let file: DisplayFile
@@ -418,14 +423,28 @@ struct FileBody: View {
             .onDisappear { store.fileTopMoved(file.id, to: nil) }
 
         if !store.collapsed.contains(file.id) {
-            ForEach(file.rows) { row in
+            ForEach(file.chunks, id: \.lowerBound) { chunk in
+                RowChunk(store: store, file: file, rows: chunk)
+            }
+        }
+    }
+}
+
+/// A run of a file's rows, laid out together as one item of the lazy stack. Each row is
+/// still its own view, so a change to one line only re-renders that line.
+struct RowChunk: View {
+    @Bindable var store: ReviewStore
+    let file: DisplayFile
+    let rows: Range<Int>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(file.rows[rows]) { row in
                 switch row.kind {
                 case .hunkHeader(let header):
                     HunkHeaderRow(header: header, digits: file.gutterDigits)
-            
                 case .line(let index):
                     LineBlock(store: store, file: file, index: index)
-            
                 }
             }
         }

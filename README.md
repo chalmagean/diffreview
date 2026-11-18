@@ -61,7 +61,7 @@ Uncommitted changes are not included in that mode.
 - **⌘↩** adds the comment, **Esc** cancels. Existing comments can be edited or deleted.
 - **Comment on file** (in each file header) adds a file-level comment.
 - **Finish review** (⌘⇧↩) opens the summary box and the **Submit review** button.
-- Files can be collapsed. Files with more than 1,500 changed lines start collapsed.
+- Files can be collapsed. Deleted files and files with more than 1,500 changed lines start collapsed.
 - **Settings…** (⌘,) picks the code font (any installed monospaced family, or the system SF Mono) and its size. The choice is remembered.
 
 Drafts are saved automatically to `.git/diffreview/comments.json`, so closing the

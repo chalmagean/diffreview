@@ -109,4 +109,13 @@ public struct FileDiff: Equatable, Sendable {
     public var additions: Int { hunks.reduce(0) { $0 + $1.lines.filter { $0.kind == .addition }.count } }
     public var deletions: Int { hunks.reduce(0) { $0 + $1.lines.filter { $0.kind == .deletion }.count } }
     public var allLines: [DiffLine] { hunks.flatMap(\.lines) }
+
+    /// Files with more lines than this start collapsed so huge diffs open instantly.
+    public static let autoCollapseLineCount = 1500
+
+    /// Whether the diff shows this file folded at first: deleted files (there's rarely
+    /// anything to review in them) and huge ones.
+    public var startsCollapsed: Bool {
+        status == .deleted || hunks.reduce(0) { $0 + $1.lines.count } > Self.autoCollapseLineCount
+    }
 }

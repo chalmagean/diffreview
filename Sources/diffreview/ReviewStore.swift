@@ -19,6 +19,8 @@ struct DisplayFile: Identifiable {
     let diff: FileDiff
     let lines: [DiffLine]
     let rows: [DisplayRow]
+    /// `rows` in groups, each one item of the diff's lazy stack (see `RowChunks`).
+    let chunks: [Range<Int>]
     let language: String
     let gutterDigits: Int
     let anchors: Set<LineAnchor>
@@ -30,6 +32,8 @@ struct DisplayFile: Identifiable {
     /// `DisplayRow` (whose ids are Ints numbered within each file).
     var sectionID: String { Self.sectionID(id) }
     static func sectionID(_ fileID: Int) -> String { "file-section-\(fileID)" }
+    /// About a screenful of lines: few enough that building a whole chunk stays cheap.
+    static let chunkSize = 50
 
     init(id: Int, diff: FileDiff) {
         self.id = id
@@ -49,6 +53,7 @@ struct DisplayFile: Identifiable {
         }
         self.lines = lines
         self.rows = rows
+        chunks = RowChunks.ranges(count: rows.count, size: Self.chunkSize)
         self.emphasis = emphasis
         language = Language.fenceName(forPath: diff.path)
         let maxLine = diff.hunks.map { max($0.oldStart + $0.oldCount, $0.newStart + $0.newCount) }.max() ?? 1
@@ -88,9 +93,6 @@ struct LineHighlight: Equatable {
 @MainActor
 @Observable
 final class ReviewStore {
-    /// Files with more lines than this start collapsed so huge diffs open instantly.
-    static let autoCollapseLineCount = 1500
-
     let files: [DisplayFile]
     let title: String
     let repoName: String
@@ -148,7 +150,7 @@ final class ReviewStore {
         self.draftStore = draftStore
         self.draft = draftStore.load() ?? ReviewDraft()
         self.filesByPath = Dictionary(display.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
-        self.collapsed = Set(display.filter { $0.lines.count > Self.autoCollapseLineCount }.map(\.id))
+        self.collapsed = Set(display.filter(\.diff.startsCollapsed).map(\.id))
         rebuildIndex()
     }
 
@@ -336,6 +338,9 @@ final class ReviewStore {
 
     /// Whether a file's first row is currently built in the diff (only then can it be scrolled to).
     func isFileTopBuilt(_ fileID: Int) -> Bool { fileTops[fileID] != nil }
+
+    /// Where a file's first row sits in the diff viewport, if it's built.
+    func fileTop(_ fileID: Int) -> Double? { fileTops[fileID] }
 
     func reveal(fileID: Int) {
         visibleFileID = fileID
