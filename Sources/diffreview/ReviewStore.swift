@@ -19,21 +19,17 @@ struct DisplayFile: Identifiable {
     let diff: FileDiff
     let lines: [DiffLine]
     let rows: [DisplayRow]
-    /// `rows` in groups, each one item of the diff's lazy stack (see `RowChunks`).
-    let chunks: [Range<Int>]
     let language: String
     let gutterDigits: Int
     let anchors: Set<LineAnchor>
     /// Word-level changes per line index: what differs from the paired deleted/added line.
     let emphasis: [Int: [NSRange]]
+    /// Index into `rows` of each line.
+    let rowOfLine: [Int]
+    /// Index into `lines` of the line each anchor names.
+    let lineOfAnchor: [LineAnchor: Int]
 
     var path: String { diff.path }
-    /// Identity of this file's section in the diff. A String, so a scroll to it can't match a
-    /// `DisplayRow` (whose ids are Ints numbered within each file).
-    var sectionID: String { Self.sectionID(id) }
-    static func sectionID(_ fileID: Int) -> String { "file-section-\(fileID)" }
-    /// About a screenful of lines: few enough that building a whole chunk stays cheap.
-    static let chunkSize = 50
 
     init(id: Int, diff: FileDiff) {
         self.id = id
@@ -53,12 +49,14 @@ struct DisplayFile: Identifiable {
         }
         self.lines = lines
         self.rows = rows
-        chunks = RowChunks.ranges(count: rows.count, size: Self.chunkSize)
         self.emphasis = emphasis
         language = Language.fenceName(forPath: diff.path)
         let maxLine = diff.hunks.map { max($0.oldStart + $0.oldCount, $0.newStart + $0.newCount) }.max() ?? 1
         gutterDigits = max(3, String(maxLine).count)
         anchors = Set(lines.compactMap(\.anchor))
+        rowOfLine = rows.compactMap { if case .line = $0.kind { $0.id } else { nil } }
+        lineOfAnchor = Dictionary(lines.enumerated().compactMap { i, line in line.anchor.map { ($0, i) } },
+                                  uniquingKeysWith: { first, _ in first })
     }
 }
 
@@ -121,14 +119,6 @@ final class ReviewStore {
         let fileID: Int
         let token = UUID()
     }
-
-    /// file id → y of its first row in the diff viewport, for the files currently built.
-    @ObservationIgnored private var fileTops: [Int: Double] = [:]
-    /// A jump from the sidebar keeps its file highlighted while the scroll settles, even
-    /// when that file can't reach the top (e.g. the last file of the diff).
-    @ObservationIgnored private var followScrollAfter = Date.distantPast
-    /// Just below the pinned file header.
-    private static let visibleFileThreshold: Double = 48
 
     /// path → anchor → comments displayed under that row.
     private(set) var lineComments: [String: [LineAnchor: [ReviewComment]]] = [:]
@@ -336,26 +326,14 @@ final class ReviewStore {
         collapsed = value ? Set(files.map(\.id)) : []
     }
 
-    /// Whether a file's first row is currently built in the diff (only then can it be scrolled to).
-    func isFileTopBuilt(_ fileID: Int) -> Bool { fileTops[fileID] != nil }
-
-    /// Where a file's first row sits in the diff viewport, if it's built.
-    func fileTop(_ fileID: Int) -> Double? { fileTops[fileID] }
-
     func reveal(fileID: Int) {
         visibleFileID = fileID
-        // Covers the re-issued scrolls in DiffView.
-        followScrollAfter = Date().addingTimeInterval(0.6)
         scrollRequest = ScrollRequest(fileID: fileID)
     }
 
-    /// A file's first row moved in the diff viewport (`nil` once it's no longer built).
-    func fileTopMoved(_ fileID: Int, to y: Double?) {
-        fileTops[fileID] = y
-        guard Date() >= followScrollAfter,
-              let current = VisibleFile.current(tops: fileTops, threshold: Self.visibleFileThreshold),
-              current != visibleFileID else { return }
-        visibleFileID = current
+    /// The user scrolled the diff to a file.
+    func diffScrolled(toFile fileID: Int) {
+        if fileID != visibleFileID { visibleFileID = fileID }
     }
 
     // MARK: - Persistence & submit

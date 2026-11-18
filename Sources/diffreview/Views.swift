@@ -295,59 +295,14 @@ struct DiffCounts: View {
 
 // MARK: - Diff
 
-/// LazyVStack keeps launch fast on huge diffs (List eagerly walks every row identity).
-/// Scroll targets are each file's always-present first row, not the pinned header.
+/// The diff, drawn by an AppKit table (see `DiffTable`): it knows every row's height up
+/// front, so jumping to a file is one exact scroll however long the diff is.
 struct DiffView: View {
     @Bindable var store: ReviewStore
 
-    /// The scroll view's visible frame, for telling which file is at the top.
-    static let coordinateSpace = "diff-viewport"
-
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    ForEach(store.files, id: \.sectionID) { file in
-                        Section {
-                            FileBody(store: store, file: file)
-                        } header: {
-                            FileHeader(store: store, file: file)
-                        }
-                    }
-                }
-                .padding(.bottom, 40)
-            }
-            .coordinateSpace(.named(Self.coordinateSpace))
-            .onChange(of: store.scrollRequest) { _, request in
-                guard let request else { return }
-                // A LazyVStack can only find a row it hasn't built by its ForEach identity:
-                // the `.id` on a file's first row doesn't exist until that row is built, and
-                // scrolling to it before then silently does nothing. So head for the file's
-                // section first, then, once its first row exists, for that row (it sits below
-                // the pinned header). Unbuilt rows only have estimated heights, so a long jump
-                // lands short; re-issuing the scroll as rows materialise converges on the target.
-                // Each scroll walks the diff up to the target, so stop once it has landed.
-                var lastTop: Double?
-                let scroll = {
-                    if store.isFileTopBuilt(request.fileID) {
-                        proxy.scrollTo(FileBody.scrollID(request.fileID), anchor: .top)
-                    } else {
-                        proxy.scrollTo(DisplayFile.sectionID(request.fileID), anchor: .top)
-                    }
-                }
-                scroll()
-                for delay in [0.05, 0.15, 0.3, 0.5] {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                        guard store.scrollRequest == request else { return }
-                        let top = store.fileTop(request.fileID)
-                        if ScrollSettle.isSettled(top: top, previousTop: lastTop) { return }
-                        lastTop = top
-                        scroll()
-                    }
-                }
-            }
-        }
-        .background(Color(nsColor: .textBackgroundColor))
+        DiffTable(store: store)
+            .background(Color(nsColor: .textBackgroundColor))
     }
 }
 
@@ -404,53 +359,6 @@ struct Tag: View {
     }
 }
 
-/// Everything below a file's header: its top row, then its rows in chunks.
-struct FileBody: View {
-    @Bindable var store: ReviewStore
-    let file: DisplayFile
-
-    static func scrollID(_ fileID: Int) -> String { "file-top-\(fileID)" }
-
-    var body: some View {
-        // Always present (even when collapsed) so it can serve as the scroll target.
-        FileTopRow(store: store, file: file)
-            .id(Self.scrollID(file.id))
-            .onGeometryChange(for: Double.self) { proxy in
-                Double(proxy.frame(in: .named(DiffView.coordinateSpace)).minY)
-            } action: { y in
-                store.fileTopMoved(file.id, to: y)
-            }
-            .onDisappear { store.fileTopMoved(file.id, to: nil) }
-
-        if !store.collapsed.contains(file.id) {
-            ForEach(file.chunks, id: \.lowerBound) { chunk in
-                RowChunk(store: store, file: file, rows: chunk)
-            }
-        }
-    }
-}
-
-/// A run of a file's rows, laid out together as one item of the lazy stack. Each row is
-/// still its own view, so a change to one line only re-renders that line.
-struct RowChunk: View {
-    @Bindable var store: ReviewStore
-    let file: DisplayFile
-    let rows: Range<Int>
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(file.rows[rows]) { row in
-                switch row.kind {
-                case .hunkHeader(let header):
-                    HunkHeaderRow(header: header, digits: file.gutterDigits)
-                case .line(let index):
-                    LineBlock(store: store, file: file, index: index)
-                }
-            }
-        }
-    }
-}
-
 /// File-level comments, the file composer, and "binary / empty" notices.
 struct FileTopRow: View {
     @Bindable var store: ReviewStore
@@ -495,8 +403,8 @@ struct Notice: View {
 @MainActor func gutterWidth(_ digits: Int) -> CGFloat { CGFloat(digits) * CodeFontSettings.shared.digitWidth + 14 }
 /// Both line-number columns, each with its trailing padding.
 @MainActor func gutterTotalWidth(_ digits: Int) -> CGFloat { (gutterWidth(digits) + 4) * 2 }
-private let markerWidth: CGFloat = 16
-private let rowPadding: CGFloat = 2
+let markerWidth: CGFloat = 16
+let rowPadding: CGFloat = 2
 
 struct HunkHeaderRow: View {
     let header: String
@@ -711,7 +619,8 @@ struct ComposerView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
         .frame(maxWidth: 860, alignment: .leading)
-        .onAppear { focused = true }
+        // A table cell appears before it's in the window, where focus can't land yet.
+        .onAppear { DispatchQueue.main.async { focused = true } }
     }
 }
 

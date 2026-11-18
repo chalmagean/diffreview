@@ -26,16 +26,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             backing: .buffered, defer: false)
         window.title = "Review · \(store.repoName)"
         window.subtitle = store.title
-        window.contentViewController = NSHostingController(rootView: RootView(store: store))
-        window.setContentSize(NSSize(width: 1280, height: 860))
         window.minSize = NSSize(width: 700, height: 400)
         window.delegate = self
         window.isReleasedWhenClosed = false
         // Open on whatever Space is active (e.g. over a full-screen terminal) rather than
         // on the desktop Space, where it would be invisible to the user.
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        window.setFrameAutosaveName("diffreview.main")
-        if !window.setFrameUsingName("diffreview.main") { window.center() }
+        // Restores the saved frame, if there is one.
+        if !window.setFrameAutosaveName("diffreview.main") || !window.setFrameUsingName("diffreview.main") {
+            window.center()
+        }
+        // Installed once the window has its final size, so the diff is laid out once rather
+        // than for every resize. (A content view controller would also resize the window to fit it.)
+        window.contentView = NSHostingView(rootView: RootView(store: store))
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
 

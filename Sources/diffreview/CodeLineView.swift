@@ -140,6 +140,36 @@ final class CodeLineNSView: NSView {
 
     // MARK: Layout
 
+    /// What `height(forWidth:)` gives for a line of code, without making a view for it.
+    static func height(of code: String, font: NSFont, noNewlineAtEnd: Bool, width: CGFloat) -> CGFloat {
+        let measurer = Measurer.shared
+        measurer.storage.setAttributedString(attributed(AttributedString(code), font: font))
+        let lineHeight = measurer.layoutManager.defaultLineHeight(for: font)
+        let limit = noNewlineAtEnd ? iconWidth : 0
+        guard width - limit < ceil(measurer.usedSize(width: .greatestFiniteMagnitude).width) else { return lineHeight }
+        return max(lineHeight, ceil(measurer.usedSize(width: max(1, width - limit)).height))
+    }
+
+    /// One TextKit stack, reused for measuring lines that aren't on screen.
+    @MainActor private final class Measurer {
+        static let shared = Measurer()
+        let storage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: .zero)
+
+        init() {
+            container.lineFragmentPadding = 0
+            layoutManager.addTextContainer(container)
+            storage.addLayoutManager(layoutManager)
+        }
+
+        func usedSize(width: CGFloat) -> CGSize {
+            container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+            layoutManager.ensureLayout(for: container)
+            return layoutManager.usedRect(for: container).size
+        }
+    }
+
     private var textWidthLimit: CGFloat { noNewlineAtEnd ? Self.iconWidth : 0 }
 
     private func wraps(atWidth width: CGFloat) -> Bool {
