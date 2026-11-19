@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Before waiting for the diff: setting the menu loads system libraries (a few tenths
         // of a second), which then happens while the diff loads.
         NSApp.mainMenu = makeMainMenu()
+        if let icon = AppIcon.load() { NSApp.applicationIconImage = icon }
         AppearanceSettings.shared.apply()
         store = loadStore()
         store.onSubmit = { markdown in

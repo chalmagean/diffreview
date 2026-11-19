@@ -21,6 +21,13 @@ func activeDeveloperDir() -> String {
 let usingCLT = activeDeveloperDir().hasPrefix(cltRoot)
     && FileManager.default.fileExists(atPath: cltFrameworks + "/Testing.framework")
 
+// The app is installed as a single bare executable (no .app bundle), so its icon is linked
+// into the binary as a section and set as the Dock icon at startup (see AppIcon.swift).
+// SwiftPM doesn't track this file as an input: after changing it, `touch` a source file
+// (or clean) so the binary is relinked.
+let appIconPath = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    .appendingPathComponent("assets/AppIcon.icns").path
+
 let package = Package(
     name: "diffreview",
     platforms: [.macOS(.v14)],
@@ -30,7 +37,14 @@ let package = Package(
     ],
     targets: [
         .target(name: "DiffReviewCore"),
-        .executableTarget(name: "diffreview", dependencies: ["DiffReviewCore"]),
+        .executableTarget(
+            name: "diffreview",
+            dependencies: ["DiffReviewCore"],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate",
+                                           "-Xlinker", "__DATA",
+                                           "-Xlinker", "__app_icon",
+                                           "-Xlinker", appIconPath])]
+        ),
         .testTarget(
             name: "DiffReviewCoreTests",
             dependencies: ["DiffReviewCore"],
