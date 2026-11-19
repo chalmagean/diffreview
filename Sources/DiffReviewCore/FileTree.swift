@@ -30,7 +30,29 @@ public enum FileTreeNode: Equatable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// One line of the sidebar: a node, and how many folders deep it sits.
+public struct FileTreeRow: Equatable, Sendable {
+    public let node: FileTreeNode
+    public let depth: Int
+}
+
 public enum FileTree {
+    /// The tree's rows top to bottom, as the sidebar lists them: each folder followed by its
+    /// entries, unless its path is in `folded`. One pass, so thousands of files stay instant.
+    public static func rows(_ nodes: [FileTreeNode], folded: Set<String>) -> [FileTreeRow] {
+        var rows: [FileTreeRow] = []
+        func add(_ nodes: [FileTreeNode], depth: Int) {
+            for node in nodes {
+                rows.append(FileTreeRow(node: node, depth: depth))
+                if case .directory(_, let path, let children) = node, !folded.contains(path) {
+                    add(children, depth: depth + 1)
+                }
+            }
+        }
+        add(nodes, depth: 0)
+        return rows
+    }
+
     /// Builds a GitHub-style tree from file paths. Entries keep the order they first appear
     /// in (the diff's order), and a folder whose only entry is another folder is joined with it.
     public static func build(paths: [String]) -> [FileTreeNode] {

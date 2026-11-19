@@ -2,9 +2,11 @@ import AppKit
 import DiffReviewCore
 import SwiftUI
 
-/// The sidebar's folder tree, drawn by an AppKit outline view. A SwiftUI List diffs every row
-/// whenever its selection moves, and the selection follows the diff as it scrolls: with
-/// thousands of files that made scrolling crawl. Moving the selection here is one row.
+/// The sidebar's folder tree, drawn by an AppKit table of rows we flatten ourselves. A SwiftUI
+/// List diffs every row whenever its selection moves, and the selection follows the diff as
+/// it scrolls: with thousands of files that made scrolling crawl. An NSOutlineView fixed that
+/// but opens folders one at a time, retiling every row below each one, so filtering 6k files
+/// took seconds per keystroke. Here a new filter is one pass over the tree and a reload.
 struct FileOutline: NSViewRepresentable {
     let store: ReviewStore
     /// The sidebar filter, already trimmed. While filtering, every folder is open.
@@ -19,61 +21,62 @@ struct FileOutline: NSViewRepresentable {
     }
 }
 
-/// A row of the tree. A class, because the outline view tells items apart by identity.
-final class FileOutlineItem {
+/// A row of the tree as the sidebar shows it.
+struct FileOutlineItem {
     let name: String
     let path: String
+    /// The file's id in the store; nil for a folder.
     let fileID: Int?
-    let children: [FileOutlineItem]
-
-    init(_ node: FileTreeNode, files: [DisplayFile]) {
-        name = node.name
-        path = node.path
-        switch node {
-        case .directory(_, _, let nodes):
-            fileID = nil
-            children = nodes.map { FileOutlineItem($0, files: files) }
-        case .file(_, _, let index):
-            fileID = files[index].id
-            children = []
-        }
-    }
+    let depth: Int
+    /// For a folder: whether its entries are listed under it.
+    let isOpen: Bool
 }
 
-/// What a row shows; `emphasized` when it's selected in the focused outline (white text).
+/// What a row shows; `emphasized` when it's selected in the focused table (white text).
 private struct FileOutlineRow: View {
     let store: ReviewStore
     let item: FileOutlineItem
     let emphasized: Bool
 
     var body: some View {
-        Group {
-            if let id = item.fileID {
-                let file = store.files[id]
-                HStack(spacing: 6) {
-                    StatusBadge(file: file.diff)
-                    Text((file.path as NSString).lastPathComponent).lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: 4)
-                    let comments = store.commentCounts[file.path] ?? 0
-                    if comments > 0 {
-                        Label(String(comments), systemImage: "text.bubble")
-                            .labelStyle(.titleAndIcon).font(.caption2)
-                            .foregroundStyle(emphasized ? Color.white : Color.blue)
-                    }
-                    DiffCounts(additions: file.diff.additions, deletions: file.diff.deletions)
-                }
-                .help(file.diff.displayPath)
-            } else {
-                Label {
-                    Text(item.name).lineLimit(1).truncationMode(.head)
-                } icon: {
-                    Image(systemName: "folder.fill").foregroundStyle(emphasized ? Color.white : Color.blue)
-                }
-                .help(item.path)
-            }
+        HStack(spacing: 2) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(emphasized ? Color.white : Color.secondary)
+                .rotationEffect(.degrees(item.isOpen ? 90 : 0))
+                .frame(width: 12)
+                .opacity(item.fileID == nil ? 1 : 0)
+            content
         }
+        .padding(.leading, CGFloat(item.depth) * 12)
         .foregroundStyle(emphasized ? Color.white : Color.primary)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var content: some View {
+        if let id = item.fileID {
+            let file = store.files[id]
+            HStack(spacing: 6) {
+                StatusBadge(file: file.diff)
+                Text(item.name).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                let comments = store.commentCounts[file.path] ?? 0
+                if comments > 0 {
+                    Label(String(comments), systemImage: "text.bubble")
+                        .labelStyle(.titleAndIcon).font(.caption2)
+                        .foregroundStyle(emphasized ? Color.white : Color.blue)
+                }
+                DiffCounts(additions: file.diff.additions, deletions: file.diff.deletions)
+            }
+            .help(file.diff.displayPath)
+        } else {
+            Label {
+                Text(item.name).lineLimit(1).truncationMode(.head)
+            } icon: {
+                Image(systemName: "folder.fill").foregroundStyle(emphasized ? Color.white : Color.blue)
+            }
+            .help(item.path)
+        }
     }
 }
 
@@ -109,18 +112,23 @@ private final class FileOutlineCell: NSTableCellView {
 }
 
 @MainActor
-final class FileOutlineController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
+final class FileOutlineController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     let store: ReviewStore
     let scrollView = NSScrollView()
-    private let outline = NSOutlineView()
+    private let table = NSTableView()
     private let emptyLabel = NSTextField(labelWithString: "No matching files")
 
-    private var roots: [FileOutlineItem] = []
-    private var itemOfFile: [Int: FileOutlineItem] = [:]
+    /// The files the filter lets through, and their tree.
+    private var shown: [DisplayFile] = []
+    private var tree: [FileTreeNode] = []
+    private var items: [FileOutlineItem] = []
+    private var rowOfFile: [Int: Int] = [:]
     private var query: String?
     /// Folders the user folded, by path; they stay folded when the filter changes.
     private var foldedFolders: Set<String> = []
-    /// Set while the outline is changed from code, so its callbacks aren't taken as the user's.
+    /// Folders folded while filtering; every folder opens again when the filter changes.
+    private var foldedWhileFiltering: Set<String> = []
+    /// Set while the table is changed from code, so its callbacks aren't taken as the user's.
     private var updating = false
 
     init(store: ReviewStore) {
@@ -129,20 +137,18 @@ final class FileOutlineController: NSObject, NSOutlineViewDataSource, NSOutlineV
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file"))
         column.resizingMask = .autoresizingMask
-        outline.addTableColumn(column)
-        outline.outlineTableColumn = column
-        outline.headerView = nil
-        outline.style = .sourceList
-        outline.rowHeight = 28
-        outline.indentationPerLevel = 12
-        outline.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
-        outline.allowsEmptySelection = true
-        outline.dataSource = self
-        outline.delegate = self
-        outline.target = self
-        outline.action = #selector(clicked(_:))
+        table.addTableColumn(column)
+        table.headerView = nil
+        table.style = .sourceList
+        table.rowHeight = 28
+        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        table.allowsEmptySelection = true
+        table.dataSource = self
+        table.delegate = self
+        table.target = self
+        table.action = #selector(clicked(_:))
 
-        scrollView.documentView = outline
+        scrollView.documentView = table
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
 
@@ -163,51 +169,52 @@ final class FileOutlineController: NSObject, NSOutlineViewDataSource, NSOutlineV
     func show(query: String) {
         guard query != self.query else { return }
         self.query = query
-        let shown = query.isEmpty ? store.files
+        foldedWhileFiltering = []
+        shown = query.isEmpty ? store.files
             : store.files.filter { $0.path.localizedCaseInsensitiveContains(query) }
-        roots = FileTree.build(paths: shown.map(\.path)).map { FileOutlineItem($0, files: shown) }
-        itemOfFile = [:]
-        func index(_ items: [FileOutlineItem]) {
-            for item in items {
-                if let id = item.fileID { itemOfFile[id] = item }
-                index(item.children)
-            }
-        }
-        index(roots)
+        tree = FileTree.build(paths: shown.map(\.path))
         emptyLabel.isHidden = !shown.isEmpty
+        reloadRows()
+    }
 
-        updating = true
-        outline.reloadData()
-        func expand(_ items: [FileOutlineItem]) {
-            for item in items where item.fileID == nil {
-                if query.isEmpty && foldedFolders.contains(item.path) { continue }
-                outline.expandItem(item)
-                expand(item.children)
+    /// Lists the tree's rows again, after a filter or a fold.
+    private func reloadRows() {
+        let folded = query?.isEmpty != false ? foldedFolders : foldedWhileFiltering
+        rowOfFile = [:]
+        items = FileTree.rows(tree, folded: folded).enumerated().map { row, entry in
+            switch entry.node {
+            case .directory(let name, let path, _):
+                return FileOutlineItem(name: name, path: path, fileID: nil, depth: entry.depth,
+                                       isOpen: !folded.contains(path))
+            case .file(let name, let path, let index):
+                let id = shown[index].id
+                rowOfFile[id] = row
+                return FileOutlineItem(name: name, path: path, fileID: id, depth: entry.depth, isOpen: false)
             }
         }
-        expand(roots)
+        updating = true
+        table.reloadData()
         updating = false
         followVisibleFile()
     }
 
+    private func toggle(folder path: String) {
+        if query?.isEmpty != false {
+            if foldedFolders.remove(path) == nil { foldedFolders.insert(path) }
+        } else {
+            if foldedWhileFiltering.remove(path) == nil { foldedWhileFiltering.insert(path) }
+        }
+        reloadRows()
+    }
+
     // MARK: Data source & delegate
 
-    func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        (item as? FileOutlineItem)?.children.count ?? roots.count
-    }
+    func numberOfRows(in tableView: NSTableView) -> Int { items.count }
 
-    func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        (item as? FileOutlineItem)?.children[index] ?? roots[index]
-    }
-
-    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        (item as? FileOutlineItem)?.fileID == nil
-    }
-
-    func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
-        guard let item = item as? FileOutlineItem else { return nil }
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let item = items[row]
         let identifier = NSUserInterfaceItemIdentifier("row")
-        if let cell = outlineView.makeView(withIdentifier: identifier, owner: nil) as? FileOutlineCell {
+        if let cell = tableView.makeView(withIdentifier: identifier, owner: nil) as? FileOutlineCell {
             cell.item = item
             return cell
         }
@@ -217,26 +224,14 @@ final class FileOutlineController: NSObject, NSOutlineViewDataSource, NSOutlineV
     }
 
     /// Folders fold rather than select.
-    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
-        (item as? FileOutlineItem)?.fileID != nil
-    }
-
-    func outlineViewItemDidCollapse(_ notification: Notification) {
-        guard !updating, query?.isEmpty == true,
-              let item = notification.userInfo?["NSObject"] as? FileOutlineItem else { return }
-        foldedFolders.insert(item.path)
-    }
-
-    func outlineViewItemDidExpand(_ notification: Notification) {
-        guard !updating, query?.isEmpty == true,
-              let item = notification.userInfo?["NSObject"] as? FileOutlineItem else { return }
-        foldedFolders.remove(item.path)
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        items[row].fileID != nil
     }
 
     /// Arrow keys move the selection: show that file. (Clicks are handled in `clicked`.)
-    func outlineViewSelectionDidChange(_ notification: Notification) {
+    func tableViewSelectionDidChange(_ notification: Notification) {
         guard !updating, NSApp.currentEvent?.type == .keyDown,
-              let id = (outline.item(atRow: outline.selectedRow) as? FileOutlineItem)?.fileID,
+              table.selectedRow >= 0, let id = items[table.selectedRow].fileID,
               id != store.visibleFileID else { return }
         store.reveal(fileID: id)
     }
@@ -244,13 +239,12 @@ final class FileOutlineController: NSObject, NSOutlineViewDataSource, NSOutlineV
     /// A click on a file shows it, even the highlighted one (back to its top); on a folder,
     /// folds or unfolds it.
     @objc private func clicked(_ sender: Any?) {
-        guard let item = outline.item(atRow: outline.clickedRow) as? FileOutlineItem else { return }
-        if let id = item.fileID {
+        let row = table.clickedRow
+        guard row >= 0 else { return }
+        if let id = items[row].fileID {
             store.reveal(fileID: id)
-        } else if outline.isItemExpanded(item) {
-            outline.collapseItem(item)
         } else {
-            outline.expandItem(item)
+            toggle(folder: items[row].path)
         }
     }
 
@@ -274,23 +268,23 @@ final class FileOutlineController: NSObject, NSOutlineViewDataSource, NSOutlineV
 
     /// Highlights the file the diff shows, scrolling the sidebar to keep it in view.
     private func followVisibleFile() {
-        let row = store.visibleFileID.flatMap { itemOfFile[$0] }.map { outline.row(forItem: $0) } ?? -1
-        guard row != outline.selectedRow else { return }
+        let row = store.visibleFileID.flatMap { rowOfFile[$0] } ?? -1
+        guard row != table.selectedRow else { return }
         updating = true
         if row >= 0 {
-            outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            outline.scrollRowToVisible(row)
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            table.scrollRowToVisible(row)
         } else {
-            outline.deselectAll(nil)
+            table.deselectAll(nil)
         }
         updating = false
     }
 
     /// Comment counts changed: redraw the rows on screen (others are built fresh when shown).
     private func refreshVisibleRows() {
-        let rows = outline.rows(in: outline.visibleRect)
+        let rows = table.rows(in: table.visibleRect)
         for row in rows.location..<NSMaxRange(rows) {
-            (outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileOutlineCell)?.refresh()
+            (table.view(atColumn: 0, row: row, makeIfNecessary: false) as? FileOutlineCell)?.refresh()
         }
     }
 }

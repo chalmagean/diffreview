@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import DiffReviewCore
 
@@ -70,5 +71,32 @@ struct FileTreeTests {
     @Test("no paths, no tree")
     func empty() {
         #expect(FileTree.build(paths: []).isEmpty)
+    }
+
+    @Test("rows list every folder's entries under it, one level deeper")
+    func rowsOpen() {
+        let tree = FileTree.build(paths: ["app/models/user.rb", "app/views/index.erb", "README.md"])
+        let rows = FileTree.rows(tree, folded: [])
+        #expect(rows.map(\.node.path) == [
+            "app", "app/models", "app/models/user.rb", "app/views", "app/views/index.erb", "README.md",
+        ])
+        #expect(rows.map(\.depth) == [0, 1, 2, 1, 2, 0])
+    }
+
+    @Test("a folded folder's row stays but its entries are left out")
+    func rowsFolded() {
+        let tree = FileTree.build(paths: ["app/models/user.rb", "app/views/index.erb", "README.md"])
+        let rows = FileTree.rows(tree, folded: ["app/models"])
+        #expect(rows.map(\.node.path) == ["app", "app/models", "app/views", "app/views/index.erb", "README.md"])
+        #expect(FileTree.rows(tree, folded: ["app"]).map(\.node.path) == ["app", "README.md"])
+    }
+
+    @Test("rows for thousands of files come back quickly")
+    func rowsScale() {
+        let paths = (0..<6000).map { "app/dir\($0 % 40)/sub\($0 % 7)/file\($0).rb" }
+        let start = Date()
+        let rows = FileTree.rows(FileTree.build(paths: paths), folded: [])
+        #expect(rows.count == 6000 + 1 + 40 + 40 * 7)
+        #expect(Date().timeIntervalSince(start) < 0.5)
     }
 }
