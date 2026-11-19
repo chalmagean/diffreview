@@ -18,7 +18,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Before waiting for the diff: setting the menu loads system libraries (a few tenths
         // of a second), which then happens while the diff loads.
         NSApp.mainMenu = makeMainMenu()
-        if let icon = AppIcon.load() { NSApp.applicationIconImage = icon }
         AppearanceSettings.shared.apply()
         store = loadStore()
         store.onSubmit = { markdown in
@@ -27,6 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         // Only now that there's a diff to show, so a failed load leaves no icon in the Dock.
         NSApp.setActivationPolicy(.regular)
+        // After the policy change: that's what creates the Dock tile, with the generic
+        // executable icon, replacing any icon set before it.
+        if let icon = AppIcon.load() { NSApp.applicationIconImage = icon }
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
