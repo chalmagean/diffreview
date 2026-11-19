@@ -64,7 +64,6 @@ private final class DiffCellView: NSView {
         super.init(frame: .zero)
         // The table sets the size; the hosting view shouldn't add constraints of its own.
         hosting.sizingOptions = []
-        hosting.autoresizingMask = [.width, .height]
         addSubview(hosting)
     }
 
@@ -72,7 +71,16 @@ private final class DiffCellView: NSView {
 
     override func layout() {
         super.layout()
-        hosting.frame = bounds
+        // While the window is dragged to a new size, rows keep the width they had: laying
+        // every visible row out again on each frame of the drag makes it stutter. They take
+        // the new width once the drag ends.
+        let width = inLiveResize && hosting.frame.width > 0 ? hosting.frame.width : bounds.width
+        hosting.frame = NSRect(x: 0, y: 0, width: width, height: bounds.height)
+    }
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        needsLayout = true
     }
 }
 
@@ -85,6 +93,13 @@ private final class PlainRowView: NSTableRowView {
 private final class DiffTableNSView: NSTableView {
     // Rows aren't selectable, so don't draw a focus ring around the table.
     override var focusRingType: NSFocusRingType { get { .none } set {} }
+
+    var onLiveResizeEnd: (() -> Void)?
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        onLiveResizeEnd?()
+    }
 }
 
 @MainActor
@@ -149,6 +164,7 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: clip, queue: nil) { [weak self] _ in
             MainActor.assumeIsolated { self?.resized() }
         }
+        tableView.onLiveResizeEnd = { [weak self] in self?.resized() }
 
         rich = richContent()
         observeContent()
@@ -264,6 +280,9 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
 
     private func resized() {
         guard width > 0, width != heightsWidth else { return }
+        // While the window is dragged, rows keep their width (see DiffCellView) and so their
+        // heights; they're measured again once, when the drag ends.
+        if ready, tableView.inLiveResize { return }
         heightsWidth = width
         heights = [:]
         if !ready {
@@ -414,6 +433,16 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         jumping = true
         scroll(to: tableView.rect(ofRow: row).minY)
         jumping = false
+        // The table picks the pinned header for the new offset only after its next layout;
+        // until then the previous file's header covers this one's. Scrolling again refreshes it.
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, row < self.tableView.numberOfRows else { return }
+                self.jumping = true
+                self.scroll(to: self.tableView.rect(ofRow: row).minY)
+                self.jumping = false
+            }
+        }
     }
 
     private func scroll(to y: CGFloat) {

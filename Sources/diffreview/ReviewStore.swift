@@ -327,6 +327,9 @@ final class ReviewStore {
     }
 
     func reveal(fileID: Int) {
+        // Picked to be read: a file that started folded (a big one) opens. Before the scroll
+        // request, so the diff has unfolded it by the time it scrolls.
+        collapsed.remove(fileID)
         visibleFileID = fileID
         scrollRequest = ScrollRequest(fileID: fileID)
     }
