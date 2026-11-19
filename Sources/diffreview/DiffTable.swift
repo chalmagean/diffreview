@@ -105,6 +105,8 @@ private final class DiffTableNSView: NSTableView {
 @MainActor
 final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     let store: ReviewStore
+    /// The store's files, which never change: read for every row, so not through the store.
+    private let files: [DisplayFile]
     let scrollView = NSScrollView()
     private let tableView = DiffTableNSView()
 
@@ -127,6 +129,7 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
 
     init(store: ReviewStore) {
         self.store = store
+        files = store.files
         collapsed = store.collapsed
         layout = DiffTableLayout(rowCounts: store.files.map(\.rows.count), collapsed: store.collapsed)
         metrics = Metrics.measure(store)
@@ -202,6 +205,8 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
         let entry = layout.rows[row]
         if let height = heights[entry] { return height }
+        // The table asks for every row's height up front: most need no measuring or caching.
+        if let height = plainHeight(entry) { return height }
         var height = computeHeight(entry)
         // A row with an invalid height would crash the table.
         if !height.isFinite || height <= 0 { height = metrics.line }
@@ -223,6 +228,31 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
     // MARK: Heights
 
     private var width: CGFloat { scrollView.contentView.bounds.width }
+
+    /// Each file's room for code at `lineSpaceWidth` in `lineSpaceFont`.
+    private var lineSpace: [CGFloat] = []
+    private var lineSpaceWidth: CGFloat = -1
+    private var lineSpaceFont: NSFont?
+
+    /// The height of a row that's one fixed height: headers, and lines that fit on one line.
+    private func plainHeight(_ entry: DiffTableRow) -> CGFloat? {
+        guard rich[entry] == nil else { return nil }
+        switch entry {
+        case .fileHeader: return metrics.fileHeader
+        case .fileTop: return metrics.emptyFileTop
+        case .row(let fileID, let index):
+            guard case .line(let lineIndex) = files[fileID].rows[index].kind else { return metrics.hunkHeader }
+            let columns = files[fileID].columns[lineIndex]
+            guard metrics.isMonospaced, columns >= 0 else { return nil }
+            if lineSpaceWidth != width || lineSpaceFont !== metrics.font {
+                lineSpace = files.map { width - gutterTotalWidth($0.gutterDigits) - markerWidth }
+                lineSpaceWidth = width
+                lineSpaceFont = metrics.font
+            }
+            let available = lineSpace[fileID] - (files[fileID].lines[lineIndex].noNewlineAtEnd ? 16 : 0)
+            return CGFloat(columns) * metrics.advance + 2 < available ? metrics.line : nil
+        }
+    }
 
     private func computeHeight(_ entry: DiffTableRow) -> CGFloat {
         if rich[entry] != nil {

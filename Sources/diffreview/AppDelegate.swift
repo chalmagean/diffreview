@@ -3,22 +3,29 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    let store: ReviewStore
+    private(set) var store: ReviewStore!
+    private let loadStore: () -> ReviewStore
     var window: NSWindow!
     private var settingsWindow: NSWindow?
 
-    init(store: ReviewStore) {
-        self.store = store
+    /// `loadStore` waits for the diff, which loads while the app starts up.
+    init(loadStore: @escaping () -> ReviewStore) {
+        self.loadStore = loadStore
         super.init()
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Before waiting for the diff: setting the menu loads system libraries (a few tenths
+        // of a second), which then happens while the diff loads.
+        NSApp.mainMenu = makeMainMenu()
+        AppearanceSettings.shared.apply()
+        store = loadStore()
         store.onSubmit = { markdown in
             FileHandle.standardOutput.write(Data(markdown.utf8))
             exit(0)
         }
-    }
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.mainMenu = makeMainMenu()
-        AppearanceSettings.shared.apply()
+        // Only now that there's a diff to show, so a failed load leaves no icon in the Dock.
+        NSApp.setActivationPolicy(.regular)
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),

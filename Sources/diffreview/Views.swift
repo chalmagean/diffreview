@@ -130,43 +130,12 @@ struct FinishReviewView: View {
 struct FileListView: View {
     @Bindable var store: ReviewStore
     @State private var filter = ""
-    /// Folder paths the user has folded.
-    @State private var collapsedFolders: Set<String> = []
 
     var body: some View {
-        let query = filter.trimmingCharacters(in: .whitespaces)
-        let shown = query.isEmpty ? store.files
-            : store.files.filter { $0.path.localizedCaseInsensitiveContains(query) }
         VStack(spacing: 0) {
             FilterField(text: $filter)
                 .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
-            ScrollViewReader { proxy in
-                // The highlight is the file the diff shows. Only user input (keyboard) goes
-                // through the setter, so following the scroll can never trigger a jump.
-                List(selection: Binding(
-                    get: { store.visibleFileID },
-                    set: { id in if let id, id != store.visibleFileID { store.reveal(fileID: id) } }
-                )) {
-                    FileTreeRows(nodes: FileTree.build(paths: shown.map(\.path)), files: shown,
-                                 commentCounts: store.commentCounts,
-                                 // Clicking the highlighted row doesn't change the selection,
-                                 // but should still jump back to the top of that file.
-                                 onClick: { store.reveal(fileID: $0) },
-                                 // While filtering, show every match.
-                                 expandAll: !query.isEmpty,
-                                 collapsed: $collapsedFolders)
-                }
-                .listStyle(.sidebar)
-                .overlay {
-                    if shown.isEmpty {
-                        Text("No matching files").font(.callout).foregroundStyle(.secondary)
-                    }
-                }
-                // Follow the diff as it scrolls, keeping the highlighted row in view.
-                .onChange(of: store.visibleFileID) { _, id in
-                    if let id { proxy.scrollTo(id) }
-                }
-            }
+            FileOutline(store: store, query: filter.trimmingCharacters(in: .whitespaces))
         }
     }
 }
@@ -193,67 +162,6 @@ struct FilterField: View {
         .padding(.horizontal, 7).padding(.vertical, 5)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor).opacity(0.6)))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
-    }
-}
-
-/// The folder tree, GitHub-style: folders fold, files are selectable rows.
-struct FileTreeRows: View {
-    let nodes: [FileTreeNode]
-    let files: [DisplayFile]
-    let commentCounts: [String: Int]
-    let onClick: (Int) -> Void
-    let expandAll: Bool
-    @Binding var collapsed: Set<String>
-
-    var body: some View {
-        ForEach(nodes) { node in
-            switch node {
-            case .directory(let name, let path, let children):
-                DisclosureGroup(isExpanded: Binding(
-                    get: { expandAll || !collapsed.contains(path) },
-                    set: { expanded in
-                        if expanded { collapsed.remove(path) } else { collapsed.insert(path) }
-                    }
-                )) {
-                    FileTreeRows(nodes: children, files: files, commentCounts: commentCounts,
-                                 onClick: onClick, expandAll: expandAll, collapsed: $collapsed)
-                } label: {
-                    Label {
-                        Text(name).lineLimit(1).truncationMode(.head)
-                    } icon: {
-                        Image(systemName: "folder.fill").foregroundStyle(.blue)
-                    }
-                    .help(path)
-                }
-            case .file(_, _, let index):
-                let file = files[index]
-                FileListRow(file: file, comments: commentCounts[file.path] ?? 0)
-                    .contentShape(Rectangle())
-                    // Simultaneous so the List still handles selection and focus.
-                    .simultaneousGesture(TapGesture().onEnded { onClick(file.id) })
-                    .tag(file.id)
-                    .id(file.id)
-            }
-        }
-    }
-}
-
-struct FileListRow: View {
-    let file: DisplayFile
-    let comments: Int
-
-    var body: some View {
-        HStack(spacing: 6) {
-            StatusBadge(file: file.diff)
-            Text((file.path as NSString).lastPathComponent).lineLimit(1).truncationMode(.middle)
-            Spacer(minLength: 4)
-            if comments > 0 {
-                Label(String(comments), systemImage: "text.bubble")
-                    .labelStyle(.titleAndIcon).font(.caption2).foregroundStyle(.blue)
-            }
-            DiffCounts(additions: file.diff.additions, deletions: file.diff.deletions)
-        }
-        .help(file.diff.displayPath)
     }
 }
 

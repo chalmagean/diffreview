@@ -26,6 +26,9 @@ struct DisplayFile: Identifiable {
     let emphasis: [Int: [NSRange]]
     /// Index into `rows` of each line.
     let rowOfLine: [Int]
+    /// Each line's width in columns, or -1 when it isn't plain ASCII (see `CodeColumns`).
+    /// Counted here, off the main thread, so the diff can tell which lines fit without it.
+    let columns: [Int32]
     /// Index into `lines` of the line each anchor names.
     let lineOfAnchor: [LineAnchor: Int]
 
@@ -55,6 +58,7 @@ struct DisplayFile: Identifiable {
         gutterDigits = max(3, String(maxLine).count)
         anchors = Set(lines.compactMap(\.anchor))
         rowOfLine = rows.compactMap { if case .line = $0.kind { $0.id } else { nil } }
+        columns = lines.map { CodeColumns.width(of: codeText($0.text)).map(Int32.init) ?? -1 }
         lineOfAnchor = Dictionary(lines.enumerated().compactMap { i, line in line.anchor.map { ($0, i) } },
                                   uniquingKeysWith: { first, _ in first })
     }
@@ -132,8 +136,28 @@ final class ReviewStore {
     @ObservationIgnored private var saveWork: DispatchWorkItem?
     @ObservationIgnored private let filesByPath: [String: DisplayFile]
 
-    init(files: [FileDiff], title: String, repoName: String, draftStore: DraftStore) {
-        let display = files.enumerated().map { DisplayFile(id: $0.offset, diff: $0.element) }
+    /// Prepares every file for display, several at a time: on a big diff this is a good part
+    /// of startup. Safe off the main thread.
+    nonisolated static func prepare(_ files: [FileDiff]) -> [DisplayFile] {
+        let results = PreparedFiles(count: files.count)
+        DispatchQueue.concurrentPerform(iterations: files.count) { i in
+            results.set(i, DisplayFile(id: i, diff: files[i]))
+        }
+        return results.values.map { $0! }
+    }
+
+    private final class PreparedFiles: @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var values: [DisplayFile?]
+        init(count: Int) { values = Array(repeating: nil, count: count) }
+        func set(_ i: Int, _ file: DisplayFile) {
+            lock.lock()
+            values[i] = file
+            lock.unlock()
+        }
+    }
+
+    init(files display: [DisplayFile], title: String, repoName: String, draftStore: DraftStore) {
         self.files = display
         self.title = title
         self.repoName = repoName
