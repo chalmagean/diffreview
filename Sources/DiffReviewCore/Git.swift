@@ -68,6 +68,11 @@ public struct Git: Sendable {
         let results = Results(count: paths.count)
         DispatchQueue.concurrentPerform(iterations: paths.count) { i in
             let path = paths[i]
+            // Read from disk; git only for a file that can't be read that way.
+            if let file = UntrackedFile.diff(path: path, root: root) {
+                results.set(i, file)
+                return
+            }
             let output = (try? git(["diff"] + Self.diffOptions + ["--no-index", "--", "/dev/null", path],
                                    allowedExitCodes: [0, 1])) ?? ""
             var file = DiffParser.parse(output).first ?? FileDiff(oldPath: nil, newPath: path, status: .added)
@@ -96,6 +101,13 @@ public struct Git: Sendable {
     }
 
     static func run(_ args: [String], in directory: URL, allowedExitCodes: Set<Int32> = [0]) throws -> String {
+        // The pipes' file handles are autoreleased: without a pool of its own, a caller on a
+        // worker thread (diffing thousands of untracked files) keeps them all open until it
+        // finishes, and past the system's limit every further launch fails.
+        try autoreleasepool { try runOnce(args, in: directory, allowedExitCodes: allowedExitCodes) }
+    }
+
+    private static func runOnce(_ args: [String], in directory: URL, allowedExitCodes: Set<Int32>) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git", "-c", "core.quotePath=false"] + args
@@ -113,9 +125,16 @@ public struct Git: Sendable {
         process.standardError = stderr
         process.standardInput = FileHandle.nullDevice
 
+        // Closed as soon as they're done with, rather than whenever the handles are freed.
+        defer {
+            try? stdout.fileHandleForReading.close()
+            try? stderr.fileHandleForReading.close()
+        }
         do {
             try process.run()
         } catch {
+            try? stdout.fileHandleForWriting.close()
+            try? stderr.fileHandleForWriting.close()
             throw GitError(message: "Could not run git: \(error.localizedDescription)")
         }
         // Drain stderr concurrently so a chatty git can't block on a full pipe while we read stdout.

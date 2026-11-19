@@ -185,6 +185,23 @@ struct GitIntegrationTests {
         #expect(git.gitDir.path == repo.url.appendingPathComponent(".git").path)
         #expect(try git.loadDiff(mode: .uncommitted).map(\.path) == ["x/y/z.txt"])
     }
+
+    // Git used to leave each run's pipes open until an autorelease pool drained, which on a
+    // worker thread was never: past ~5,000 runs every launch failed ("Bad file descriptor").
+    @Test("running git leaves no file descriptors open")
+    func noDescriptorLeak() throws {
+        let repo = try TempRepo()
+        let git = try Git(directory: repo.url)
+        _ = try git.git(["status", "--porcelain"])
+        let before = openDescriptors()
+        DispatchQueue.concurrentPerform(iterations: 500) { _ in _ = try? git.git(["status", "--porcelain"]) }
+        // Two per run would leak; allow for other tests running meanwhile.
+        #expect(openDescriptors() - before < 40)
+    }
+
+    private func openDescriptors() -> Int {
+        (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? 0
+    }
 }
 
 @Suite("Arguments")
