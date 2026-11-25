@@ -44,6 +44,7 @@ diffreview --base main     # commits on the current branch since its merge-base 
 diffreview abc123          # the changes made by one commit (like `git show abc123`)
 diffreview abc123..HEAD    # committed changes from abc123 to HEAD (`abc123..` is the same)
 diffreview main...feature  # what feature changed since it forked from main
+diffreview --session <id>  # Ask Claude chats fork this Claude Code session (see below)
 diffreview --help
 ```
 
@@ -70,7 +71,35 @@ To review everything after commit `abc123`, use `abc123..HEAD` (or `abc123..`).
 - **Comment on file** (in each file header) adds a file-level comment.
 - **Finish review** (⌘⇧↩) opens the summary box and the **Submit review** button.
 - Files can be collapsed. Deleted files and files with more than 1,500 changed lines start collapsed.
-- **Settings…** (⌘,) picks the code font (any installed monospaced family, or the system SF Mono) and its size. The choice is remembered.
+- **Settings…** (⌘,) picks the code font (any installed monospaced family, or the system SF Mono) and its size. Its **Chat** tab sets how chats read: typeface, size, line height and a color theme (Standard, Paper, Night, High contrast), with a live preview. Choices are remembered.
+
+### Asking Claude
+
+To ask about code instead of commenting on it, type your question in the comment box and click
+**Ask Claude** (⌥⌘↩). This works for line comments and file comments. The question opens a new chat in a sidebar on the
+right of the diff, and you can keep asking follow-ups there (⌘↩ sends) without leaving the
+review. While a chat is open, the code it's about stays highlighted in the diff.
+
+Every **Ask Claude** starts a chat of its own. With no chat open, the sidebar lists them all;
+click one to open it, and click its header to fold it back into the list. **Chats** in the top
+bar (⌥⌘C) shows or hides the sidebar at any time, and the box at the bottom of the list asks
+about the diff as a whole.
+
+Chats run `claude -p` (Claude Code in headless mode) in the repository, so they need `claude`
+on your `PATH` (or in `~/.local/bin`) and use your Claude Code login. They can only read: the
+Read, Grep and Glob tools, plus `git log`, `git show` and `git diff`. MCP servers and connectors
+are left out.
+
+When the review was opened by `/diffreview`, each chat starts as a fork of that Claude Code
+session (`--resume <id> --fork-session`), so it answers knowing what that session knows about
+the code: why it was written that way, what was tried. The session itself isn't changed, and
+nothing from the chats goes into it. Run `diffreview` yourself and chats start as new sessions,
+which can read the code but don't know its history. Pass `--session <id>` to fork a session of
+your choice.
+
+Chats aren't part of the review and aren't saved: they end when the window closes. Each
+`claude` run is logged to `.git/diffreview/chats.log` (its arguments, exit status, stderr and
+the output that isn't answer text), which is where to look if a chat fails.
 
 Drafts are saved automatically to `.git/diffreview/comments.json`, so closing the
 window doesn't lose work: the next run picks up where you left off. The file is
@@ -128,15 +157,16 @@ It contains:
 ```markdown
 ---
 description: Open diffreview to review changes GitHub-style, then address the comments
-argument-hint: [--base <ref>]
+argument-hint: [--base <ref> | <commit> | <range>]
 allowed-tools: Bash(diffreview) Bash(diffreview *)
 ---
-!`diffreview $ARGUMENTS`
+!`diffreview --session="${CLAUDE_SESSION_ID}" $ARGUMENTS`
 Address each review comment above. If something is unclear, ask before changing it.
 ```
 
 Then run `/diffreview` (or `/diffreview --base main`) in any repository. Cancelling the
-review makes the command abort, so nothing is sent to Claude.
+review makes the command abort, so nothing is sent to Claude. `--session` hands diffreview the
+session's id, so [Ask Claude](#asking-claude) chats can fork it.
 
 **Timeout:** Claude Code runs `!` commands under the Bash tool's default timeout of
 2 minutes, and reviews usually take longer. Raise it in `~/.claude/settings.json`:

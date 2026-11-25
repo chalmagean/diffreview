@@ -69,8 +69,11 @@ MainActor.assumeIsolated {
     let app = NSApplication.shared
     let delegate = AppDelegate {
         let loaded = loading.wait()
+        let chats = ChatStore(directory: loaded.git.root, gitDir: loaded.git.gitDir, reviewing: title,
+                              sessionArgument: arguments.session)
         return ReviewStore(files: loaded.files, title: title, repoName: loaded.git.root.lastPathComponent,
-                           context: loaded.context, draftStore: DraftStore(gitDir: loaded.git.gitDir))
+                           context: loaded.context, draftStore: DraftStore(gitDir: loaded.git.gitDir),
+                           chats: chats)
     }
     app.delegate = delegate
     app.run()

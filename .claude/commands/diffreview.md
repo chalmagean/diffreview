@@ -3,5 +3,5 @@ description: Open diffreview to review changes GitHub-style, then address the co
 argument-hint: [--base <ref> | <commit> | <range>]
 allowed-tools: Bash(diffreview) Bash(diffreview *)
 ---
-!`diffreview $ARGUMENTS`
+!`diffreview --session="${CLAUDE_SESSION_ID}" $ARGUMENTS`
 Address each review comment above. If something is unclear, ask before changing it.

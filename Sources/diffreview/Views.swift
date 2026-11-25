@@ -50,6 +50,11 @@ struct RootView: View {
                 DiffView(store: store)
             }
             .frame(minWidth: 480)
+            if store.chats.isOpen && store.chats.isAvailable {
+                ChatSidebar(chats: store.chats, onReveal: { store.reveal($0) },
+                            onAskAboutReview: { store.askAboutReview($0) })
+                    .frame(minWidth: 300, idealWidth: 400, maxWidth: 700)
+            }
         }
         .frame(minWidth: 700, minHeight: 400)
     }
@@ -71,6 +76,16 @@ struct TopBar: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            if store.chats.isAvailable {
+                let count = store.chats.chats.count
+                Button {
+                    store.chats.isOpen.toggle()
+                } label: {
+                    Label(count == 0 ? "Chats" : "Chats (\(count))", systemImage: "bubble.left.and.bubble.right")
+                }
+                .help(store.chats.isOpen ? "Hide the chats (⌥⌘C)" : "Show the chats, to ask Claude about the diff (⌥⌘C)")
+                .keyboardShortcut("c", modifiers: [.command, .option])
+            }
             Button("Expand all") { store.setAllCollapsed(false) }
             Button("Collapse all") { store.setAllCollapsed(true) }
             Button {
@@ -283,7 +298,8 @@ struct FileTopRow: View {
                     }
                     if store.fileComposerID == file.id {
                         ComposerView(text: $store.fileComposerText, title: "Comment on \(file.path)",
-                                     onCancel: store.cancelFileComposer, onSubmit: store.addFileComment)
+                                     onCancel: store.cancelFileComposer, onSubmit: store.addFileComment,
+                                     onAsk: askAction)
                     }
                 }
                 .padding(.vertical, 4)
@@ -296,6 +312,11 @@ struct FileTopRow: View {
             }
             Color.clear.frame(height: 1)
         }
+    }
+
+    private var askAction: (() -> Void)? {
+        guard store.chats.isAvailable else { return nil }
+        return { [store] in store.askAboutFile() }
     }
 }
 
@@ -365,16 +386,22 @@ struct LineBlock: View {
                         CommentView(store: store, comment: comment, outdated: false)
                     }
                     if showComposer, let sel = store.selection {
+                        // The selection stays highlighted in the code above, so it isn't quoted here.
                         ComposerView(text: $store.composerText,
                                      title: composerTitle(sel),
-                                     quote: store.partialText(sel),
-                                     onCancel: store.cancelComposer, onSubmit: store.addLineComment)
+                                     onCancel: store.cancelComposer, onSubmit: store.addLineComment,
+                                     onAsk: askAction)
                     }
                 }
                 .padding(.vertical, 4)
                 .background(Color(nsColor: .windowBackgroundColor).opacity(0.5))
             }
         }
+    }
+
+    private var askAction: (() -> Void)? {
+        guard store.chats.isAvailable else { return nil }
+        return { [store] in store.askAboutSelection() }
     }
 
     func composerTitle(_ sel: LineSelection) -> String {
@@ -482,16 +509,16 @@ struct AddCommentButton: View {
 struct ComposerView: View {
     @Binding var text: String
     let title: String
-    var quote: String? = nil
     var submitLabel = "Add comment"
     let onCancel: () -> Void
     let onSubmit: () -> Void
+    /// Set when the text can instead be asked as a question, in a new chat.
+    var onAsk: (() -> Void)? = nil
     @FocusState private var focused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            if let quote { SelectedTextQuote(text: quote) }
             TextEditor(text: $text)
                 .font(.body)
                 .focused($focused)
@@ -499,7 +526,7 @@ struct ComposerView: View {
                 // stack don't fire reliably.
                 .onKeyPress(.return, phases: .down) { press in
                     guard press.modifiers.contains(.command) else { return .ignored }
-                    onSubmit()
+                    if press.modifiers.contains(.option), let onAsk { onAsk() } else { onSubmit() }
                     return .handled
                 }
                 .onKeyPress(.escape) {
@@ -513,12 +540,21 @@ struct ComposerView: View {
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.accentColor.opacity(0.6)))
             HStack {
-                Text("⌘↩ to \(submitLabel.lowercased()) · esc to cancel").font(.caption2).foregroundStyle(.tertiary)
+                Text("⌘↩ to \(submitLabel.lowercased())\(onAsk == nil ? "" : " · ⌥⌘↩ to ask Claude") · esc to cancel")
+                    .font(.caption2).foregroundStyle(.tertiary)
                 Spacer()
+                let isEmpty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 Button("Cancel", action: onCancel)
+                if let onAsk {
+                    Button(action: onAsk) {
+                        Label("Ask Claude", systemImage: "bubble.left.and.text.bubble.right")
+                    }
+                    .disabled(isEmpty)
+                    .help("Ask this as a question in a new chat, instead of adding it as a comment")
+                }
                 Button(submitLabel, action: onSubmit)
                     .buttonStyle(.borderedProminent)
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(isEmpty)
             }
         }
         .padding(10)

@@ -123,6 +123,8 @@ final class ReviewStore {
 
     struct ScrollRequest: Equatable {
         let fileID: Int
+        /// A line to bring into view (an index into the file's lines); nil for the file's top.
+        var lineIndex: Int? = nil
         let token = UUID()
     }
 
@@ -133,6 +135,8 @@ final class ReviewStore {
     private(set) var commentCounts: [String: Int] = [:]
 
     @ObservationIgnored let draftStore: DraftStore
+    /// "Ask Claude" chats, shown in the sidebar on the right.
+    @ObservationIgnored let chats: ChatStore
     @ObservationIgnored let highlighter: SyntaxHighlighter = PlainHighlighter()
     @ObservationIgnored var onSubmit: ((String) -> Void)?
     @ObservationIgnored private var saveWork: DispatchWorkItem?
@@ -160,12 +164,13 @@ final class ReviewStore {
     }
 
     init(files display: [DisplayFile], title: String, repoName: String, context: String?,
-         draftStore: DraftStore) {
+         draftStore: DraftStore, chats: ChatStore) {
         self.files = display
         self.title = title
         self.repoName = repoName
         self.context = context
         self.draftStore = draftStore
+        self.chats = chats
         self.draft = draftStore.load() ?? ReviewDraft()
         self.filesByPath = Dictionary(display.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         self.collapsed = Set(display.filter(\.diff.startsCollapsed).map(\.id))
@@ -216,13 +221,32 @@ final class ReviewStore {
         }
     }
 
-    /// Whole-line selection highlight (character selections highlight text instead).
+    /// Whole-line selection highlight (character selections highlight text instead), for the
+    /// selection being made and for the code the open chat is about.
     func isSelected(fileID: Int, lineIndex: Int) -> Bool {
-        guard let sel = selection, sel.fileID == fileID, !sel.isCharacterSelection else { return false }
-        return sel.range.contains(lineIndex)
+        [selection, chatSelection].contains { sel in
+            guard let sel, sel.fileID == fileID, !sel.isCharacterSelection else { return false }
+            return sel.range.contains(lineIndex)
+        }
     }
 
     func highlight(fileID: Int, lineIndex: Int) -> LineHighlight? {
+        highlight(of: selection, fileID: fileID, lineIndex: lineIndex)
+            ?? highlight(of: chatSelection, fileID: fileID, lineIndex: lineIndex)
+    }
+
+    /// The code the active chat is about, as a selection, while the chats are showing: it
+    /// stays highlighted as it was when the question was asked.
+    private var chatSelection: LineSelection? {
+        guard chats.isOpen, let context = chats.active?.context,
+              let start = context.startAnchor, let end = context.endAnchor,
+              let file = filesByPath[context.path],
+              let first = file.lineOfAnchor[start], let last = file.lineOfAnchor[end] else { return nil }
+        return LineSelection(fileID: file.id, anchor: first, head: last,
+                             anchorOffset: context.startOffset, headOffset: context.endOffset)
+    }
+
+    private func highlight(of selection: LineSelection?, fileID: Int, lineIndex: Int) -> LineHighlight? {
         guard let sel = selection, sel.fileID == fileID, sel.range.contains(lineIndex),
               let ordered = sel.ordered,
               let file = files.first(where: { $0.id == fileID }) else { return nil }
@@ -287,6 +311,32 @@ final class ReviewStore {
         draft.comments.append(ReviewComment.line(path: file.path, lines: lines, body: body,
                                                  selectedText: partialText(sel)))
         cancelComposer()
+    }
+
+    /// Asks Claude what's typed in the composer, about the selected code, in a new chat.
+    func askAboutSelection() {
+        guard let sel = selection, let file = files.first(where: { $0.id == sel.fileID }) else { return }
+        let question = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { return }
+        chats.ask(question, about: .lines(path: file.path, lines: Array(file.lines[sel.range]),
+                                          selectedText: partialText(sel),
+                                          startOffset: sel.ordered?.start.offset, endOffset: sel.ordered?.end.offset))
+        cancelComposer()
+    }
+
+    /// Asks Claude about the diff as a whole, in a new chat.
+    func askAboutReview(_ question: String) {
+        guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        chats.ask(question, about: .review(files: files.map(\.diff)))
+    }
+
+    /// Asks Claude what's typed in the file composer, about the whole file, in a new chat.
+    func askAboutFile() {
+        guard let id = fileComposerID, let file = files.first(where: { $0.id == id }) else { return }
+        let question = fileComposerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { return }
+        chats.ask(question, about: .file(path: file.path))
+        cancelFileComposer()
     }
 
     func openFileComposer(fileID: Int) {
@@ -360,6 +410,15 @@ final class ReviewStore {
         collapsed.remove(fileID)
         visibleFileID = fileID
         scrollRequest = ScrollRequest(fileID: fileID)
+    }
+
+    /// Scrolls the diff to the code a chat is about.
+    func reveal(_ chat: Chat) {
+        guard let file = filesByPath[chat.context.path] else { return }
+        collapsed.remove(file.id)
+        visibleFileID = file.id
+        let line = chat.context.startAnchor.flatMap { file.lineOfAnchor[$0] }
+        scrollRequest = ScrollRequest(fileID: file.id, lineIndex: line)
     }
 
     /// The user scrolled the diff to a file.

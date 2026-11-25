@@ -319,7 +319,7 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             ready = true
             tableView.reloadData()
             tableView.sizeLastColumnToFit()
-            if let id = store.scrollRequest?.fileID { jump(to: id) }
+            if let request = store.scrollRequest { jump(to: request.fileID, line: request.lineIndex) }
             return
         }
         // Lines above re-wrap, so keep the row at the top in place rather than the offset.
@@ -451,14 +451,21 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    if let id = self.store.scrollRequest?.fileID { self.jump(to: id) }
+                    if let request = self.store.scrollRequest { self.jump(to: request.fileID, line: request.lineIndex) }
                     self.observeScrollRequests()
                 }
             }
         }
     }
 
-    private func jump(to fileID: Int) {
+    /// Scrolls to a file's header, or with `line`, to that line, a few lines below the
+    /// pinned header so it isn't hidden under it.
+    private func jump(to fileID: Int, line: Int? = nil) {
+        if let line, ready, files[fileID].rowOfLine.indices.contains(line),
+           let row = layout.index(of: .row(file: fileID, index: files[fileID].rowOfLine[line])) {
+            scroll(to: tableView.rect(ofRow: row).minY - metrics.fileHeader - 3 * metrics.line)
+            return
+        }
         guard ready, let row = layout.headerRow(ofFile: fileID) else { return }
         jumping = true
         scroll(to: tableView.rect(ofRow: row).minY)

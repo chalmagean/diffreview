@@ -79,6 +79,95 @@ final class AppearanceSettings {
 }
 
 struct SettingsView: View {
+    var body: some View {
+        TabView {
+            DiffSettingsTab()
+                .tabItem { Label("Diff", systemImage: "text.alignleft") }
+            ChatSettingsTab()
+                .tabItem { Label("Chat", systemImage: "bubble.left.and.text.bubble.right") }
+        }
+        .frame(width: 460)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// How the chats' text looks: typeface, size, line height and colors, with a live sample.
+private struct ChatSettingsTab: View {
+    @Bindable var settings = ChatTextSettings.shared
+
+    /// An answer using most of what answers contain, to judge the settings by.
+    private static let sample = """
+        ## Why it's here
+
+        `jump(to:)` scrolls **twice**: once now, and once after the table's next layout, \
+        because the pinned header only updates then.
+
+        - The first scroll moves the rows.
+        - The second one fixes the header.
+
+        ```swift
+        scroll(to: rect.minY)
+        ```
+        """
+
+    var body: some View {
+        let preference = settings.preference
+        Form {
+            Picker("Typeface", selection: Binding(
+                get: { preference.typeface },
+                set: { settings.preference = preference.with(typeface: $0) }
+            )) {
+                ForEach(ChatTextPreference.Typeface.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            LabeledContent("Size") {
+                Stepper(value: Binding(
+                    get: { preference.size },
+                    set: { settings.preference = preference.with(size: $0) }
+                ), in: ChatTextPreference.sizeRange, step: 1) {
+                    Text(verbatim: "\(Int(preference.size)) pt").monospacedDigit()
+                }
+            }
+            LabeledContent("Line height") {
+                HStack {
+                    Slider(value: Binding(
+                        get: { preference.lineHeight },
+                        set: { settings.preference = preference.with(lineHeight: ($0 * 10).rounded() / 10) }
+                    ), in: ChatTextPreference.lineHeightRange)
+                    .frame(width: 160)
+                    Text(String(format: "%.1f×", preference.lineHeight)).monospacedDigit().frame(width: 36, alignment: .trailing)
+                }
+            }
+            Picker("Theme", selection: Binding(
+                get: { preference.theme },
+                set: { settings.preference = preference.with(theme: $0) }
+            )) {
+                ForEach(ChatTextPreference.Theme.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            Section("Preview") {
+                AnswerText(text: Self.sample)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .chatThemed(settings.theme)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            HStack {
+                Spacer()
+                Button("Restore Defaults") { settings.preference = .default }
+                    .disabled(preference == .default)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+private extension ChatTextPreference {
+    func with(typeface: Typeface? = nil, size: Double? = nil, lineHeight: Double? = nil, theme: Theme? = nil) -> Self {
+        ChatTextPreference(typeface: typeface ?? self.typeface, size: size ?? self.size,
+                           lineHeight: lineHeight ?? self.lineHeight, theme: theme ?? self.theme)
+    }
+}
+
+private struct DiffSettingsTab: View {
     @Bindable var settings = CodeFontSettings.shared
     @Bindable var appearance = AppearanceSettings.shared
 
@@ -125,8 +214,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 440)
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// The installed monospaced families, plus the saved one if it isn't among them

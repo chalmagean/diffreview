@@ -20,7 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.mainMenu = makeMainMenu()
         AppearanceSettings.shared.apply()
         store = loadStore()
-        store.onSubmit = { markdown in
+        store.onSubmit = { [store] markdown in
+            store?.chats.stopAll()
             FileHandle.standardOutput.write(Data(markdown.utf8))
             exit(0)
         }
@@ -67,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Closing without submitting: keep the draft on disk, print nothing, exit 1.
     func cancel() -> Never {
+        store.chats.stopAll()
         store.saveNow()
         exit(1)
     }
