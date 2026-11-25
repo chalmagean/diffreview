@@ -22,25 +22,35 @@ if arguments.help {
 /// preparing the rows take seconds, and AppKit's own startup takes about one more.
 final class DiffLoading: @unchecked Sendable {
     private let done = DispatchSemaphore(value: 0)
-    private var result: Result<(Git, [DisplayFile]), Error>?
+    private var result: Result<Loaded, Error>?
+
+    struct Loaded {
+        let git: Git
+        let files: [DisplayFile]
+        /// What's being reviewed, for the top of the output; nil for uncommitted changes.
+        let context: String?
+    }
 
     init(mode: DiffMode) {
         DispatchQueue.global(qos: .userInitiated).async {
             self.result = Result {
                 let git = try Git(directory: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
-                return (git, ReviewStore.prepare(try git.loadDiff(mode: mode)))
+                let range = try git.commitRange(for: mode)
+                let files = ReviewStore.prepare(try git.loadDiff(mode: mode, range: range))
+                let context = try range.map { try git.reviewedCommits($0).description }
+                return Loaded(git: git, files: files, context: context)
             }
             self.done.signal()
         }
     }
 
     /// Waits for the diff; exits, without showing anything, when there's none to review.
-    func wait() -> (Git, [DisplayFile]) {
+    func wait() -> Loaded {
         done.wait()
         switch result! {
         case .failure(let error): fail("\(error)")
         case .success(let loaded):
-            if loaded.1.isEmpty { fail("no changes to review", code: 1) }
+            if loaded.files.isEmpty { fail("no changes to review", code: 1) }
             return loaded
         }
     }
@@ -58,9 +68,9 @@ case .commits(let spec): title = spec.contains("..") ? "Changes in \(spec)" : "C
 MainActor.assumeIsolated {
     let app = NSApplication.shared
     let delegate = AppDelegate {
-        let (git, files) = loading.wait()
-        return ReviewStore(files: files, title: title, repoName: git.root.lastPathComponent,
-                           draftStore: DraftStore(gitDir: git.gitDir))
+        let loaded = loading.wait()
+        return ReviewStore(files: loaded.files, title: title, repoName: loaded.git.root.lastPathComponent,
+                           context: loaded.context, draftStore: DraftStore(gitDir: loaded.git.gitDir))
     }
     app.delegate = delegate
     app.run()

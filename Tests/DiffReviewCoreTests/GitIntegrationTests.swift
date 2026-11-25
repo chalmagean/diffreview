@@ -232,6 +232,32 @@ struct GitIntegrationTests {
         }
     }
 
+    @Test("the review names the commits it covers, pinned to SHAs")
+    func reviewedCommits() throws {
+        let (repo, shas) = try historyRepo()
+        let git = try Git(directory: repo.url)
+        let short = try shas.map { Git.trimmed(try repo.git("rev-parse", "--short", $0)) }
+
+        #expect(try git.commitRange(for: .uncommitted) == nil)
+
+        let one = try #require(try git.commitRange(for: .commits("HEAD~1")))
+        #expect(one.to == shas[1] && one.from == shas[0] && one.isSingleCommit)
+        #expect(try git.reviewedCommits(one) == ReviewedCommits(
+            from: short[0], to: short[1], isSingleCommit: true, subject: "c2", count: 1))
+
+        let root = try #require(try git.commitRange(for: .commits(shas[0])))
+        #expect(try git.reviewedCommits(root).subject == "c1")
+
+        let range = try #require(try git.commitRange(for: .commits("\(shas[0])..")))
+        #expect(try git.reviewedCommits(range) == ReviewedCommits(
+            from: short[0], to: short[2], isSingleCommit: false, subject: nil, count: 2))
+
+        // Three dots and --base start from the merge-base.
+        let forked = try #require(try git.commitRange(for: .commits("main...side")))
+        #expect(forked.from == shas[1])
+        #expect(try git.commitRange(for: .base("side")) == CommitRange(from: shas[1], to: shas[2]))
+    }
+
     @Test("outside a repository throws")
     func notARepo() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("not-a-repo-\(UUID().uuidString)")

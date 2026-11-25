@@ -104,6 +104,14 @@ Line numbers refer to the new version of the file, or to the old version (`(old)
 when only deleted lines are selected. Selections that mix added and removed lines
 are shown as a `diff` block.
 
+When the review is of committed work (a commit, a range or `--base`), a line under the
+title says which commits it covers, so the reader can find them even after HEAD moves:
+
+```markdown
+Reviewing commit 170ec1b ("Set the Dock icon"). Line numbers marked (new) are from 170ec1b, (old) from its parent.
+Reviewing 80e8115..170ec1b (3 commits). Line numbers marked (new) are from 170ec1b, (old) from 80e8115.
+```
+
 ## Claude Code integration
 
 The repo ships a `/diffreview` command in

@@ -3,8 +3,10 @@ import Foundation
 public enum MarkdownRenderer {
     /// Renders the review grouped by file, in diff order. Comments on files that are no longer in the
     /// diff are still included (after the others) so no feedback is silently dropped.
-    public static func render(draft: ReviewDraft, files: [FileDiff]) -> String {
+    /// `context` (what was reviewed) is a paragraph of its own under the title.
+    public static func render(draft: ReviewDraft, files: [FileDiff], context: String? = nil) -> String {
         var out = "# Code Review\n\n"
+        if let context, !trimmed(context).isEmpty { out += trimmed(context) + "\n\n" }
         let summary = trimmed(draft.summary)
         if !summary.isEmpty { out += summary + "\n\n" }
 

@@ -150,6 +150,17 @@ struct MarkdownRendererTests {
         #expect(md == "# Code Review\n\nNo comments.\n")
     }
 
+    @Test("what was reviewed comes right under the title, before the summary")
+    func context() {
+        var draft = ReviewDraft()
+        draft.summary = "Looks good."
+        draft.comments = [ReviewComment.file(path: "gone.txt", body: "one thing")]
+        let md = MarkdownRenderer.render(draft: draft, files: [], context: "Reviewing commit abc.")
+        #expect(md == "# Code Review\n\nReviewing commit abc.\n\nLooks good.\n\n## gone.txt\n\none thing\n")
+        #expect(MarkdownRenderer.render(draft: ReviewDraft(), files: [], context: "Reviewing commit abc.")
+            == "# Code Review\n\nReviewing commit abc.\n\nNo comments.\n")
+    }
+
     @Test("blank comments are skipped")
     func blankComments() {
         var draft = ReviewDraft()

@@ -98,6 +98,8 @@ final class ReviewStore {
     let files: [DisplayFile]
     let title: String
     let repoName: String
+    /// What's being reviewed (for committed work), printed at the top of the review.
+    let context: String?
 
     var draft: ReviewDraft {
         didSet {
@@ -157,10 +159,12 @@ final class ReviewStore {
         }
     }
 
-    init(files display: [DisplayFile], title: String, repoName: String, draftStore: DraftStore) {
+    init(files display: [DisplayFile], title: String, repoName: String, context: String?,
+         draftStore: DraftStore) {
         self.files = display
         self.title = title
         self.repoName = repoName
+        self.context = context
         self.draftStore = draftStore
         self.draft = draftStore.load() ?? ReviewDraft()
         self.filesByPath = Dictionary(display.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
@@ -407,7 +411,7 @@ final class ReviewStore {
     func submit() {
         commitPendingComposers()
         saveWork?.cancel()
-        let markdown = MarkdownRenderer.render(draft: draft, files: files.map(\.diff))
+        let markdown = MarkdownRenderer.render(draft: draft, files: files.map(\.diff), context: context)
         draftStore.clear()
         onSubmit?(markdown)
     }

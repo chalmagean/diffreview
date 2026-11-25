@@ -17,6 +17,40 @@ public enum DiffMode: Equatable, Sendable {
     case commits(String)
 }
 
+/// Two commits whose difference is under review, as full SHAs. `from` may be the empty tree
+/// (the root commit's "parent").
+public struct CommitRange: Equatable, Sendable {
+    public var from: String
+    public var to: String
+    /// Just the one commit `to`, compared with its parent.
+    public var isSingleCommit: Bool
+
+    public init(from: String, to: String, isSingleCommit: Bool = false) {
+        self.from = from
+        self.to = to
+        self.isSingleCommit = isSingleCommit
+    }
+}
+
+/// What a review of committed work covers, worded for the top of the review output, so its
+/// reader knows which commits it's about and which versions of the files the line numbers mean.
+public struct ReviewedCommits: Equatable, Sendable, CustomStringConvertible {
+    public var from: String
+    public var to: String
+    public var isSingleCommit: Bool
+    public var subject: String?
+    public var count: Int
+
+    public var description: String {
+        if isSingleCommit {
+            let name = subject.map { "\(to) (\"\($0)\")" } ?? to
+            return "Reviewing commit \(name). Line numbers marked (new) are from \(to), (old) from its parent."
+        }
+        let commits = count == 1 ? "1 commit" : "\(count) commits"
+        return "Reviewing \(from)..\(to) (\(commits)). Line numbers marked (new) are from \(to), (old) from \(from)."
+    }
+}
+
 public struct Git: Sendable {
     public let root: URL
     public let gitDir: URL
@@ -35,27 +69,54 @@ public struct Git: Sendable {
     }
 
     public func loadDiff(mode: DiffMode) throws -> [FileDiff] {
-        switch mode {
-        case .uncommitted:
+        try loadDiff(mode: mode, range: try commitRange(for: mode))
+    }
+
+    /// The diff for `mode`, given the range `commitRange(for: mode)` already resolved, so the
+    /// diff and the description of what was reviewed come from the same commits.
+    public func loadDiff(mode: DiffMode, range: CommitRange?) throws -> [FileDiff] {
+        guard let range else {
             let base = try hasHead() ? "HEAD" : emptyTree()
             let tracked = DiffParser.parse(try git(["diff"] + Self.diffOptions + [base, "--"]))
             return tracked + (try untrackedFiles())
+        }
+        return DiffParser.parse(try git(["diff"] + Self.diffOptions + [range.from, range.to, "--"]))
+    }
+
+    /// The commits a committed-work mode compares, as full SHAs; nil for uncommitted changes.
+    public func commitRange(for mode: DiffMode) throws -> CommitRange? {
+        switch mode {
+        case .uncommitted:
+            return nil
         case .base(let ref):
-            let commit = try resolveCommit(ref)
-            return try diff(from: try mergeBase(commit, "HEAD", names: (ref, "HEAD")), to: "HEAD")
+            let (commit, head) = (try resolveCommit(ref), try resolveCommit("HEAD"))
+            return CommitRange(from: try mergeBase(commit, head, names: (ref, "HEAD")), to: head)
         case .commits(let spec):
             if let (left, right) = Self.split(spec, on: "...") {
                 let (from, to) = (try resolveCommit(left), try resolveCommit(right))
-                return try diff(from: try mergeBase(from, to, names: (left, right)), to: to)
+                return CommitRange(from: try mergeBase(from, to, names: (left, right)), to: to)
             }
             if let (left, right) = Self.split(spec, on: "..") {
-                return try diff(from: try resolveCommit(left), to: try resolveCommit(right))
+                return CommitRange(from: try resolveCommit(left), to: try resolveCommit(right))
             }
             let commit = try resolveCommit(spec)
             // The root commit has no parent: compare it with the empty tree.
             let parent = try (try? resolveCommit(commit + "^")) ?? emptyTree()
-            return try diff(from: parent, to: commit)
+            return CommitRange(from: parent, to: commit, isSingleCommit: true)
         }
+    }
+
+    /// Short names, subject and size of `range`, for telling the review's reader what it covers.
+    public func reviewedCommits(_ range: CommitRange) throws -> ReviewedCommits {
+        let short = { (sha: String) in Self.trimmed(try self.git(["rev-parse", "--short", sha])) }
+        let subject = range.isSingleCommit
+            ? Self.trimmed(try git(["log", "-1", "--format=%s", range.to]))
+            : nil
+        let count = range.isSingleCommit
+            ? 1
+            : Int(Self.trimmed(try git(["rev-list", "--count", "\(range.from)..\(range.to)"]))) ?? 0
+        return ReviewedCommits(from: try short(range.from), to: try short(range.to),
+                               isSingleCommit: range.isSingleCommit, subject: subject, count: count)
     }
 
     /// Splits a range like `A..B` into its sides, with an empty side meaning HEAD.
@@ -83,9 +144,6 @@ public struct Git: Sendable {
         }
     }
 
-    func diff(from: String, to: String) throws -> [FileDiff] {
-        DiffParser.parse(try git(["diff"] + Self.diffOptions + [from, to, "--"]))
-    }
 
     func hasHead() throws -> Bool {
         (try? git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])) != nil
