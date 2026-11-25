@@ -52,6 +52,7 @@ let title: String
 switch arguments.mode {
 case .uncommitted: title = "Uncommitted changes"
 case .base(let ref): title = "Changes since \(ref)"
+case .commits(let spec): title = spec.contains("..") ? "Changes in \(spec)" : "Commit \(spec)"
 }
 
 MainActor.assumeIsolated {

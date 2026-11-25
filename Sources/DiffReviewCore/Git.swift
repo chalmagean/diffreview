@@ -11,6 +11,10 @@ public enum DiffMode: Equatable, Sendable {
     case uncommitted
     /// Committed changes on the current branch since its merge-base with `ref`.
     case base(String)
+    /// Already-committed changes, read the way `git` reads the spec:
+    /// `<commit>` is that one commit (like `git show`), `A..B` diffs A against B, and
+    /// `A...B` diffs B against its merge-base with A. An empty side of a range means HEAD.
+    case commits(String)
 }
 
 public struct Git: Sendable {
@@ -37,18 +41,50 @@ public struct Git: Sendable {
             let tracked = DiffParser.parse(try git(["diff"] + Self.diffOptions + [base, "--"]))
             return tracked + (try untrackedFiles())
         case .base(let ref):
-            guard let commit = try? Self.trimmed(git(["rev-parse", "--verify", "--quiet", "--end-of-options", ref + "^{commit}"])),
-                  !commit.isEmpty else {
-                throw GitError(message: "Unknown ref '\(ref)'")
+            let commit = try resolveCommit(ref)
+            return try diff(from: try mergeBase(commit, "HEAD", names: (ref, "HEAD")), to: "HEAD")
+        case .commits(let spec):
+            if let (left, right) = Self.split(spec, on: "...") {
+                let (from, to) = (try resolveCommit(left), try resolveCommit(right))
+                return try diff(from: try mergeBase(from, to, names: (left, right)), to: to)
             }
-            let mergeBase: String
-            do {
-                mergeBase = Self.trimmed(try git(["merge-base", commit, "HEAD"]))
-            } catch {
-                throw GitError(message: "No common ancestor between '\(ref)' and HEAD")
+            if let (left, right) = Self.split(spec, on: "..") {
+                return try diff(from: try resolveCommit(left), to: try resolveCommit(right))
             }
-            return DiffParser.parse(try git(["diff"] + Self.diffOptions + [mergeBase, "HEAD", "--"]))
+            let commit = try resolveCommit(spec)
+            // The root commit has no parent: compare it with the empty tree.
+            let parent = try (try? resolveCommit(commit + "^")) ?? emptyTree()
+            return try diff(from: parent, to: commit)
         }
+    }
+
+    /// Splits a range like `A..B` into its sides, with an empty side meaning HEAD.
+    static func split(_ spec: String, on separator: String) -> (String, String)? {
+        guard let r = spec.range(of: separator) else { return nil }
+        let left = String(spec[..<r.lowerBound])
+        let right = String(spec[r.upperBound...])
+        return (left.isEmpty ? "HEAD" : left, right.isEmpty ? "HEAD" : right)
+    }
+
+    func resolveCommit(_ ref: String) throws -> String {
+        guard !ref.isEmpty,
+              let commit = try? Self.trimmed(git(["rev-parse", "--verify", "--quiet", "--end-of-options", ref + "^{commit}"])),
+              !commit.isEmpty else {
+            throw GitError(message: "Unknown ref '\(ref)'")
+        }
+        return commit
+    }
+
+    func mergeBase(_ a: String, _ b: String, names: (String, String)) throws -> String {
+        do {
+            return Self.trimmed(try git(["merge-base", a, b]))
+        } catch {
+            throw GitError(message: "No common ancestor between '\(names.0)' and '\(names.1)'")
+        }
+    }
+
+    func diff(from: String, to: String) throws -> [FileDiff] {
+        DiffParser.parse(try git(["diff"] + Self.diffOptions + [from, to, "--"]))
     }
 
     func hasHead() throws -> Bool {

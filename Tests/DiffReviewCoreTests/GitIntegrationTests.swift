@@ -166,6 +166,72 @@ struct GitIntegrationTests {
         }
     }
 
+    /// main: c1 (a=1) → c2 (a=2) → c3 (a=3), plus a side branch off c2 (side.txt)
+    /// and an uncommitted edit that no commit mode may show.
+    private func historyRepo() throws -> (TempRepo, [String]) {
+        let repo = try TempRepo()
+        var shas: [String] = []
+        for n in 1...3 {
+            try repo.write("a.txt", "\(n)\n")
+            try repo.commitAll("c\(n)")
+            shas.append(Git.trimmed(try repo.git("rev-parse", "HEAD")))
+        }
+        try repo.git("checkout", "-q", "-b", "side", shas[1])
+        try repo.write("side.txt", "s\n")
+        try repo.commitAll("side")
+        try repo.git("checkout", "-q", "main")
+        try repo.write("a.txt", "uncommitted\n")
+        return (repo, shas)
+    }
+
+    private func addedLines(_ files: [FileDiff]) -> [String] {
+        files.flatMap { $0.hunks.flatMap { $0.lines.filter { $0.kind == .addition }.map(\.text) } }
+    }
+
+    @Test("a single commit shows only that commit's changes")
+    func singleCommit() throws {
+        let (repo, shas) = try historyRepo()
+        let files = try Git(directory: repo.url).loadDiff(mode: .commits(shas[1]))
+        #expect(files.map(\.path) == ["a.txt"])
+        #expect(addedLines(files) == ["2"])
+    }
+
+    @Test("the root commit shows its files as added")
+    func rootCommit() throws {
+        let (repo, shas) = try historyRepo()
+        let files = try Git(directory: repo.url).loadDiff(mode: .commits(shas[0]))
+        #expect(files.map(\.status) == [.added])
+        #expect(addedLines(files) == ["1"])
+    }
+
+    @Test("A..B diffs A against B, and an empty side means HEAD")
+    func twoDotRange() throws {
+        let (repo, shas) = try historyRepo()
+        let git = try Git(directory: repo.url)
+        #expect(addedLines(try git.loadDiff(mode: .commits("\(shas[0])..\(shas[1])"))) == ["2"])
+        #expect(addedLines(try git.loadDiff(mode: .commits("\(shas[0])..HEAD"))) == ["3"])
+        #expect(addedLines(try git.loadDiff(mode: .commits("\(shas[0]).."))) == ["3"])
+    }
+
+    @Test("A...B diffs B against its merge-base with A")
+    func threeDotRange() throws {
+        let (repo, _) = try historyRepo()
+        let git = try Git(directory: repo.url)
+        // Only the side branch's own commit, not main's c3.
+        let files = try git.loadDiff(mode: .commits("main...side"))
+        #expect(files.map(\.path) == ["side.txt"])
+        #expect(try git.loadDiff(mode: .commits("side...")).map(\.path) == ["a.txt"])
+    }
+
+    @Test("an unknown commit or range side throws")
+    func badCommits() throws {
+        let (repo, _) = try historyRepo()
+        let git = try Git(directory: repo.url)
+        for spec in ["nope", "nope..HEAD", "HEAD...nope"] {
+            #expect(throws: GitError.self) { try git.loadDiff(mode: .commits(spec)) }
+        }
+    }
+
     @Test("outside a repository throws")
     func notARepo() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("not-a-repo-\(UUID().uuidString)")
@@ -214,5 +280,12 @@ struct ArgumentsTests {
         #expect(throws: ArgumentError.self) { try Arguments.parse(["--base"]) }
         #expect(throws: ArgumentError.self) { try Arguments.parse(["--wat"]) }
         #expect(throws: ArgumentError.self) { try Arguments.parse(["-b", "main"]) }
+
+        #expect(try Arguments.parse(["abc123"]) == Arguments(mode: .commits("abc123")))
+        #expect(try Arguments.parse(["main..HEAD"]) == Arguments(mode: .commits("main..HEAD")))
+        #expect(try Arguments.parse(["HEAD...abc"]) == Arguments(mode: .commits("HEAD...abc")))
+        #expect(throws: ArgumentError.self) { try Arguments.parse(["a", "b"]) }
+        #expect(throws: ArgumentError.self) { try Arguments.parse(["a", "--base", "main"]) }
+        #expect(throws: ArgumentError.self) { try Arguments.parse(["--base", "main", "a"]) }
     }
 }

@@ -41,6 +41,9 @@ so you can tell whether you're on the latest build.
 ```sh
 diffreview                 # uncommitted changes: `git diff HEAD` plus untracked files
 diffreview --base main     # commits on the current branch since its merge-base with main
+diffreview abc123          # the changes made by one commit (like `git show abc123`)
+diffreview abc123..HEAD    # committed changes from abc123 to HEAD (`abc123..` is the same)
+diffreview main...feature  # what feature changed since it forked from main
 diffreview --help
 ```
 
@@ -53,6 +56,11 @@ diffreview --help
 
 `--base` compares committed work only (`merge-base..HEAD`), like a pull request.
 Uncommitted changes are not included in that mode.
+
+A commit or range reviews work that's already committed, and never includes
+uncommitted changes either. Ranges mean what they mean to `git diff`: `A..B` is the
+difference between A and B, and `A...B` is what B changed since its merge-base with A.
+To review everything after commit `abc123`, use `abc123..HEAD` (or `abc123..`).
 
 ### Reviewing
 
