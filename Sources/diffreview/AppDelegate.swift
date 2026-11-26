@@ -79,13 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func showSettings(_ sender: Any?) {
         if settingsWindow == nil {
-            let settings = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
-            settings.title = "Settings"
-            settings.styleMask = [.titled, .closable]
-            settings.isReleasedWhenClosed = false
-            settings.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-            settings.center()
-            settingsWindow = settings
+            settingsWindow = SettingsWindow.make()
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
