@@ -44,6 +44,18 @@ public struct DiffTableLayout: Sendable {
         starts.indices.contains(file) ? starts[file] : nil
     }
 
+    /// The file being read in the table rows on screen (from just under the pinned header to
+    /// the bottom of the viewport): the first with code showing, so collapsed files whose
+    /// headers stack above it are passed over. With no code on screen, the top row's file.
+    public func fileBeingRead(inRows visible: Range<Int>) -> Int? {
+        let visible = visible.clamped(to: rows.indices)
+        guard let top = visible.first else { return nil }
+        for index in visible {
+            if case .row(let file, _) = rows[index] { return file }
+        }
+        return rows[top].file
+    }
+
     /// The table row showing `row`, or nil when it isn't shown.
     public func index(of row: DiffTableRow) -> Int? {
         guard let start = headerRow(ofFile: row.file) else { return nil }

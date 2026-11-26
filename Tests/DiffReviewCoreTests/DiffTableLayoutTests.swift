@@ -40,6 +40,25 @@ struct DiffTableLayoutTests {
         #expect(layout.headerRow(ofFile: 2) == nil)
     }
 
+    @Test func theFileBeingReadIsTheFirstWithCodeOnScreen() {
+        // Files 0–2 collapsed: their headers stack up above file 3's code.
+        let layout = DiffTableLayout(rowCounts: [2, 2, 2, 3], collapsed: [0, 1, 2])
+        let firstHeader = layout.headerRow(ofFile: 1)!
+        #expect(layout.fileBeingRead(inRows: firstHeader..<layout.rows.count) == 3)
+    }
+
+    @Test func aFileScrolledPartwayIsTheFileBeingRead() {
+        let layout = DiffTableLayout(rowCounts: [3, 3], collapsed: [])
+        let middleOfFirst = layout.index(of: .row(file: 0, index: 1))!
+        #expect(layout.fileBeingRead(inRows: middleOfFirst..<layout.rows.count) == 0)
+    }
+
+    @Test func withNoCodeOnScreenTheTopFileIsTheFileBeingRead() {
+        let layout = DiffTableLayout(rowCounts: [2, 2, 2], collapsed: [0, 1, 2])
+        #expect(layout.fileBeingRead(inRows: 2..<layout.rows.count) == 1)
+        #expect(layout.fileBeingRead(inRows: 0..<0) == nil)
+    }
+
     @Test func everyEntryKnowsItsFile() {
         #expect(DiffTableRow.fileHeader(file: 3).file == 3)
         #expect(DiffTableRow.fileTop(file: 4).file == 4)

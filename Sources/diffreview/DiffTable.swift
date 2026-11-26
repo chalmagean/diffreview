@@ -489,13 +489,17 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         scrollView.reflectScrolledClipView(clip)
     }
 
-    /// Highlights, in the sidebar, the file whose rows are just under the pinned header.
+    /// Highlights, in the sidebar, the file being read: the first with code on screen under
+    /// the pinned header, not a collapsed file whose header happens to sit there.
     private func scrolled() {
         guard ready, !jumping else { return }
-        let y = scrollView.contentView.bounds.minY + metrics.fileHeader
-        let row = tableView.row(at: NSPoint(x: 1, y: y))
-        guard row >= 0 else { return }
-        store.diffScrolled(toFile: layout.rows[row].file)
+        let bounds = scrollView.contentView.bounds
+        let top = tableView.row(at: NSPoint(x: 1, y: bounds.minY + metrics.fileHeader))
+        guard top >= 0 else { return }
+        let bottom = tableView.row(at: NSPoint(x: 1, y: bounds.maxY - 1))
+        let end = bottom >= 0 ? bottom + 1 : layout.rows.count
+        guard let file = layout.fileBeingRead(inRows: top..<end) else { return }
+        store.diffScrolled(toFile: file)
     }
 }
 
