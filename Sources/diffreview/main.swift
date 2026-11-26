@@ -27,6 +27,8 @@ final class DiffLoading: @unchecked Sendable {
     struct Loaded {
         let git: Git
         let files: [DisplayFile]
+        /// The commits under review; nil for uncommitted changes.
+        let range: CommitRange?
         /// What's being reviewed, for the top of the output; nil for uncommitted changes.
         let context: String?
     }
@@ -38,7 +40,7 @@ final class DiffLoading: @unchecked Sendable {
                 let range = try git.commitRange(for: mode)
                 let files = ReviewStore.prepare(try git.loadDiff(mode: mode, range: range))
                 let context = try range.map { try git.reviewedCommits($0).description }
-                return Loaded(git: git, files: files, context: context)
+                return Loaded(git: git, files: files, range: range, context: context)
             }
             self.done.signal()
         }
@@ -73,7 +75,10 @@ MainActor.assumeIsolated {
                               sessionArgument: arguments.session)
         return ReviewStore(files: loaded.files, title: title, repoName: loaded.git.root.lastPathComponent,
                            context: loaded.context, draftStore: DraftStore(gitDir: loaded.git.gitDir),
-                           chats: chats)
+                           chats: chats,
+                           loadNewContent: { [git = loaded.git, range = loaded.range] file in
+                               try git.newContent(of: file, range: range)
+                           })
     }
     app.delegate = delegate
     app.run()

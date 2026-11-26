@@ -1,10 +1,13 @@
 import AppKit
+import DiffReviewCore
 import SwiftUI
 
 /// The code part of one diff line, drawn with TextKit so text can be selected by dragging,
 /// across lines too. A click without a drag is reported as a line click.
 struct CodeLineView: NSViewRepresentable {
-    let code: AttributedString
+    let code: String
+    /// Syntax highlighting of `code`.
+    var tokens: [SyntaxToken] = []
     let font: NSFont
     let fileID: Int
     let lineIndex: Int
@@ -31,7 +34,7 @@ struct CodeLineView: NSViewRepresentable {
         view.onDragBegin = onDragBegin
         view.onDragMove = onDragMove
         view.onDragEnd = onDragEnd
-        view.configure(code: code, font: font, highlight: highlight, noNewlineAtEnd: noNewlineAtEnd)
+        view.configure(code: code, tokens: tokens, font: font, highlight: highlight, noNewlineAtEnd: noNewlineAtEnd)
         view.setEmphasis(emphasis, color: emphasisColor)
     }
 
@@ -52,7 +55,8 @@ final class CodeLineNSView: NSView {
     private let storage = NSTextStorage()
     private let layoutManager = NSLayoutManager()
     private let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
-    private var code: AttributedString?
+    private var code: String?
+    private var tokens: [SyntaxToken] = []
     private var font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
     private var highlight: LineHighlight?
     private var emphasis: [NSRange] = []
@@ -86,12 +90,13 @@ final class CodeLineNSView: NSView {
 
     override var isFlipped: Bool { true }
 
-    func configure(code: AttributedString, font: NSFont, highlight: LineHighlight?, noNewlineAtEnd: Bool) {
-        if code != self.code || font != self.font || noNewlineAtEnd != self.noNewlineAtEnd {
+    func configure(code: String, tokens: [SyntaxToken], font: NSFont, highlight: LineHighlight?, noNewlineAtEnd: Bool) {
+        if code != self.code || tokens != self.tokens || font != self.font || noNewlineAtEnd != self.noNewlineAtEnd {
             self.code = code
+            self.tokens = tokens
             self.font = font
             self.noNewlineAtEnd = noNewlineAtEnd
-            storage.setAttributedString(Self.attributed(code, font: font))
+            storage.setAttributedString(Self.attributed(code, tokens: tokens, font: font))
             container.size = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
             layoutManager.ensureLayout(for: container)
             unwrappedWidth = ceil(layoutManager.usedRect(for: container).width)
@@ -118,22 +123,18 @@ final class CodeLineNSView: NSView {
         needsDisplay = true
     }
 
-    private static func attributed(_ code: AttributedString, font: NSFont) -> NSAttributedString {
+    private static func attributed(_ text: String, tokens: [SyntaxToken], font: NSFont) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.tabStops = []
         paragraph.defaultTabInterval = 4 * (" " as NSString).size(withAttributes: [.font: font]).width
-        let text = String(code.characters)
         let result = NSMutableAttributedString(string: text, attributes: [
             .font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph,
         ])
-        // Keep colours from a syntax highlighter (AppKit or SwiftUI attributes).
-        for run in code.runs {
-            let range = NSRange(run.range, in: code)
-            if let color = run.appKit.foregroundColor {
-                result.addAttribute(.foregroundColor, value: color, range: range)
-            } else if let color = run.swiftUI.foregroundColor {
-                result.addAttribute(.foregroundColor, value: NSColor(color), range: range)
-            }
+        let whole = NSRange(location: 0, length: result.length)
+        for token in tokens {
+            let range = NSIntersectionRange(NSRange(location: token.location, length: token.length), whole)
+            guard range.length > 0 else { continue }
+            result.addAttribute(.foregroundColor, value: SyntaxColors.color(for: token.kind), range: range)
         }
         return result
     }
@@ -143,7 +144,7 @@ final class CodeLineNSView: NSView {
     /// What `height(forWidth:)` gives for a line of code, without making a view for it.
     static func height(of code: String, font: NSFont, noNewlineAtEnd: Bool, width: CGFloat) -> CGFloat {
         let measurer = Measurer.shared
-        measurer.storage.setAttributedString(attributed(AttributedString(code), font: font))
+        measurer.storage.setAttributedString(attributed(code, tokens: [], font: font))
         let lineHeight = measurer.layoutManager.defaultLineHeight(for: font)
         let limit = noNewlineAtEnd ? iconWidth : 0
         guard width - limit < ceil(measurer.usedSize(width: .greatestFiniteMagnitude).width) else { return lineHeight }

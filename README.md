@@ -71,6 +71,8 @@ To review everything after commit `abc123`, use `abc123..HEAD` (or `abc123..`).
 - **Comment on file** (in each file header) adds a file-level comment.
 - **Finish review** (⌘⇧↩) opens the summary box and the **Submit review** button.
 - Files can be collapsed. Deleted files and files with more than 1,500 changed lines start collapsed.
+- The switch in each file header shows the **whole file** instead of its diff, and back. It's the new version: the working tree for uncommitted changes, the file as committed for a commit, range or `--base`. Lines the diff added are marked in the gutter. Comments work the same way in both views, and a comment on a line that only one view shows is listed with the file's comments in the other.
+- Code is syntax highlighted in GitHub's colours, for the common languages (by file extension).
 - **Settings…** (⌘,) picks the code font (any installed monospaced family, or the system SF Mono) and its size. Its **Chat** tab sets how chats read: typeface, size, line height and a color theme (Standard, Paper, Night, High contrast), with a live preview. Choices are remembered.
 
 ### Asking Claude
@@ -198,13 +200,12 @@ through a small runner (`scripts/TestRunner.swift`). Under Xcode it just calls `
 
 - `Sources/DiffReviewCore`: no UI. Runs git, parses unified diffs (renames, copies,
   binary files, mode changes, quoted paths, "\ No newline at end of file"), models
-  comments, renders the markdown review and stores drafts.
+  comments, renders the markdown review and stores drafts. `Syntax.swift` and
+  `Grammar.swift` are the syntax highlighter: a small line-by-line tokenizer, with no
+  dependencies, that carries block comments and multi-line strings from line to line.
 - `Sources/diffreview`: the AppKit/SwiftUI app.
 - `Tests/DiffReviewCoreTests`: parser and renderer tests, plus integration tests that
   run real git in temporary repositories.
-
-Syntax highlighting isn't implemented yet. `Sources/diffreview/SyntaxHighlighter.swift`
-is the place to add it: each line is passed through `SyntaxHighlighter.highlight(_:language:)`.
 
 ## License
 

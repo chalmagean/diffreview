@@ -13,12 +13,16 @@ struct DisplayRow: Identifiable {
     let kind: Kind
 }
 
-/// A FileDiff prepared for display: flattened lines and rows computed once.
+/// A FileDiff prepared for display: flattened lines and rows computed once. Either the diff,
+/// or (`isFullFile`) the whole new version of the file, which keeps the diff's `id` and `diff`.
 struct DisplayFile: Identifiable {
     let id: Int
     let diff: FileDiff
+    let isFullFile: Bool
     let lines: [DiffLine]
     let rows: [DisplayRow]
+    /// Syntax highlighting of each line.
+    let tokens: [[SyntaxToken]]
     let language: String
     let gutterDigits: Int
     let anchors: Set<LineAnchor>
@@ -34,9 +38,8 @@ struct DisplayFile: Identifiable {
 
     var path: String { diff.path }
 
+    /// The diff of a file.
     init(id: Int, diff: FileDiff) {
-        self.id = id
-        self.diff = diff
         var lines: [DiffLine] = []
         var rows: [DisplayRow] = []
         var emphasis: [Int: [NSRange]] = [:]
@@ -50,11 +53,34 @@ struct DisplayFile: Identifiable {
                 lines.append(line)
             }
         }
+        let language = Language.fenceName(forPath: diff.path)
+        let maxLine = diff.hunks.map { max($0.oldStart + $0.oldCount, $0.newStart + $0.newCount) }.max() ?? 1
+        self.init(id: id, diff: diff, isFullFile: false, lines: lines, rows: rows, emphasis: emphasis,
+                  tokens: Syntax.tokenize(hunks: diff.hunks, language: language),
+                  language: language, maxLine: maxLine)
+    }
+
+    /// The whole new version of a file (`text`), in place of its diff.
+    init(id: Int, diff: FileDiff, fullText text: String) {
+        let lines = FullFile.lines(of: text, diff: diff)
+        let rows = lines.indices.map { DisplayRow(id: $0, kind: .line($0)) }
+        let language = Language.fenceName(forPath: diff.path)
+        let maxLine = max(lines.count, lines.compactMap(\.oldNumber).max() ?? 1)
+        self.init(id: id, diff: diff, isFullFile: true, lines: lines, rows: rows, emphasis: [:],
+                  tokens: Syntax.tokenize(lines: lines.map(\.text), language: language),
+                  language: language, maxLine: maxLine)
+    }
+
+    private init(id: Int, diff: FileDiff, isFullFile: Bool, lines: [DiffLine], rows: [DisplayRow],
+                 emphasis: [Int: [NSRange]], tokens: [[SyntaxToken]], language: String, maxLine: Int) {
+        self.id = id
+        self.diff = diff
+        self.isFullFile = isFullFile
         self.lines = lines
         self.rows = rows
         self.emphasis = emphasis
-        language = Language.fenceName(forPath: diff.path)
-        let maxLine = diff.hunks.map { max($0.oldStart + $0.oldCount, $0.newStart + $0.newCount) }.max() ?? 1
+        self.tokens = tokens
+        self.language = language
         gutterDigits = max(3, String(maxLine).count)
         anchors = Set(lines.compactMap(\.anchor))
         rowOfLine = rows.compactMap { if case .line = $0.kind { $0.id } else { nil } }
@@ -109,6 +135,12 @@ final class ReviewStore {
     }
 
     var collapsed: Set<Int>
+    /// Files shown whole instead of as their diff.
+    private(set) var showingFullFile: Set<Int> = []
+    /// The whole-file views loaded so far, by file id.
+    private(set) var fullFiles: [Int: DisplayFile] = [:]
+    /// Why a file's whole version couldn't be shown, by file id.
+    private(set) var fullFileErrors: [Int: String] = [:]
     var selection: LineSelection?
     /// A text selection is being dragged out; the composer waits until it's done.
     var isDraggingSelection = false
@@ -137,7 +169,8 @@ final class ReviewStore {
     @ObservationIgnored let draftStore: DraftStore
     /// "Ask Claude" chats, shown in the sidebar on the right.
     @ObservationIgnored let chats: ChatStore
-    @ObservationIgnored let highlighter: SyntaxHighlighter = PlainHighlighter()
+    /// Reads a file's new version, for showing it whole; nil when that isn't possible.
+    @ObservationIgnored private let loadNewContent: ((FileDiff) throws -> String)?
     @ObservationIgnored var onSubmit: ((String) -> Void)?
     @ObservationIgnored private var saveWork: DispatchWorkItem?
     @ObservationIgnored private let filesByPath: [String: DisplayFile]
@@ -164,13 +197,14 @@ final class ReviewStore {
     }
 
     init(files display: [DisplayFile], title: String, repoName: String, context: String?,
-         draftStore: DraftStore, chats: ChatStore) {
+         draftStore: DraftStore, chats: ChatStore, loadNewContent: ((FileDiff) throws -> String)? = nil) {
         self.files = display
         self.title = title
         self.repoName = repoName
         self.context = context
         self.draftStore = draftStore
         self.chats = chats
+        self.loadNewContent = loadNewContent
         self.draft = draftStore.load() ?? ReviewDraft()
         self.filesByPath = Dictionary(display.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         self.collapsed = Set(display.filter(\.diff.startsCollapsed).map(\.id))
@@ -187,9 +221,48 @@ final class ReviewStore {
         draft.comments.filter { filesByPath[$0.path] == nil }
     }
 
+    /// A line comment whose line is in neither the diff nor the file's whole version (as far
+    /// as it's loaded): restored from a draft of an older diff.
     func isOutdated(_ comment: ReviewComment) -> Bool {
-        guard let anchor = comment.endAnchor else { return false }
-        return filesByPath[comment.path]?.anchors.contains(anchor) != true
+        guard let anchor = comment.endAnchor, let file = filesByPath[comment.path] else {
+            return comment.endAnchor != nil
+        }
+        return !file.anchors.contains(anchor) && fullFiles[file.id]?.anchors.contains(anchor) != true
+    }
+
+    // MARK: - Diff or whole file
+
+    /// What the diff shows for a file: its diff, or its whole new version.
+    func shown(_ id: Int) -> DisplayFile {
+        showingFullFile.contains(id) ? fullFiles[id] ?? files[id] : files[id]
+    }
+
+    /// Whether a file can be shown whole: it has a new version, and it's text.
+    func canShowFullFile(_ id: Int) -> Bool {
+        let diff = files[id].diff
+        return loadNewContent != nil && diff.newPath != nil && !diff.isBinary
+    }
+
+    /// Shows a file whole or as its diff. Its whole version is read the first time.
+    func setShowsFullFile(_ id: Int, _ value: Bool) {
+        guard value != showingFullFile.contains(id) else { return }
+        if value {
+            guard canShowFullFile(id), let load = loadNewContent else { return }
+            if fullFiles[id] == nil {
+                do {
+                    fullFiles[id] = DisplayFile(id: id, diff: files[id].diff, fullText: try load(files[id].diff))
+                    fullFileErrors[id] = nil
+                } catch {
+                    fullFileErrors[id] = "\(error)"
+                    return
+                }
+            }
+        }
+        // Line indices mean other lines in the other view.
+        if selection?.fileID == id { cancelComposer() }
+        if value { showingFullFile.insert(id) } else { showingFullFile.remove(id) }
+        collapsed.remove(id)
+        rebuildIndex()
     }
 
     private func rebuildIndex() {
@@ -198,7 +271,8 @@ final class ReviewStore {
         var counts: [String: Int] = [:]
         for c in draft.comments {
             counts[c.path, default: 0] += 1
-            if let anchor = c.endAnchor, !isOutdated(c) {
+            // Under its line when that line is on screen; otherwise with the file comments.
+            if let anchor = c.endAnchor, let file = filesByPath[c.path], shown(file.id).anchors.contains(anchor) {
                 lines[c.path, default: [:]][anchor, default: []].append(c)
             } else {
                 fileLevel[c.path, default: []].append(c)
@@ -240,16 +314,21 @@ final class ReviewStore {
     private var chatSelection: LineSelection? {
         guard chats.isOpen, let context = chats.active?.context,
               let start = context.startAnchor, let end = context.endAnchor,
-              let file = filesByPath[context.path],
-              let first = file.lineOfAnchor[start], let last = file.lineOfAnchor[end] else { return nil }
-        return LineSelection(fileID: file.id, anchor: first, head: last,
+              let id = filesByPath[context.path]?.id,
+              let first = shown(id).lineOfAnchor[start], let last = shown(id).lineOfAnchor[end] else { return nil }
+        return LineSelection(fileID: id, anchor: first, head: last,
                              anchorOffset: context.startOffset, headOffset: context.endOffset)
+    }
+
+    /// The view on screen of the file with this id.
+    private func shownFile(_ id: Int) -> DisplayFile? {
+        files.indices.contains(id) ? shown(id) : nil
     }
 
     private func highlight(of selection: LineSelection?, fileID: Int, lineIndex: Int) -> LineHighlight? {
         guard let sel = selection, sel.fileID == fileID, sel.range.contains(lineIndex),
               let ordered = sel.ordered,
-              let file = files.first(where: { $0.id == fileID }) else { return nil }
+              let file = shownFile(fileID) else { return nil }
         let length = (codeText(file.lines[lineIndex].text) as NSString).length
         let (start, end) = ordered
         let from = lineIndex == start.line ? min(start.offset, length) : 0
@@ -292,7 +371,7 @@ final class ReviewStore {
 
     func partialText(_ sel: LineSelection) -> String? {
         guard let ordered = sel.ordered,
-              let file = files.first(where: { $0.id == sel.fileID }) else { return nil }
+              let file = shownFile(sel.fileID) else { return nil }
         return SelectedText.extract(lines: file.lines[sel.range].map(\.text),
                                     startOffset: ordered.start.offset, endOffset: ordered.end.offset)
     }
@@ -304,7 +383,7 @@ final class ReviewStore {
     }
 
     func addLineComment() {
-        guard let sel = selection, let file = files.first(where: { $0.id == sel.fileID }) else { return }
+        guard let sel = selection, let file = shownFile(sel.fileID) else { return }
         let body = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
         let lines = Array(file.lines[sel.range])
@@ -315,7 +394,7 @@ final class ReviewStore {
 
     /// Asks Claude what's typed in the composer, about the selected code, in a new chat.
     func askAboutSelection() {
-        guard let sel = selection, let file = files.first(where: { $0.id == sel.fileID }) else { return }
+        guard let sel = selection, let file = shownFile(sel.fileID) else { return }
         let question = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
         chats.ask(question, about: .lines(path: file.path, lines: Array(file.lines[sel.range]),
@@ -332,7 +411,7 @@ final class ReviewStore {
 
     /// Asks Claude what's typed in the file composer, about the whole file, in a new chat.
     func askAboutFile() {
-        guard let id = fileComposerID, let file = files.first(where: { $0.id == id }) else { return }
+        guard let id = fileComposerID, let file = shownFile(id) else { return }
         let question = fileComposerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
         chats.ask(question, about: .file(path: file.path))
@@ -350,7 +429,7 @@ final class ReviewStore {
     }
 
     func addFileComment() {
-        guard let id = fileComposerID, let file = files.first(where: { $0.id == id }) else { return }
+        guard let id = fileComposerID, let file = shownFile(id) else { return }
         let body = fileComposerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
         draft.comments.append(ReviewComment.file(path: file.path, body: body))
@@ -417,7 +496,7 @@ final class ReviewStore {
         guard let file = filesByPath[chat.context.path] else { return }
         collapsed.remove(file.id)
         visibleFileID = file.id
-        let line = chat.context.startAnchor.flatMap { file.lineOfAnchor[$0] }
+        let line = chat.context.startAnchor.flatMap { shown(file.id).lineOfAnchor[$0] }
         scrollRequest = ScrollRequest(fileID: file.id, lineIndex: line)
     }
 

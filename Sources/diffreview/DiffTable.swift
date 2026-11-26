@@ -32,7 +32,7 @@ struct DiffRowContent: View {
     }
 
     @ViewBuilder private var content: some View {
-        let file = store.files[row.file]
+        let file = store.shown(row.file)
         switch row {
         case .fileHeader:
             FileHeader(store: store, file: file)
@@ -105,8 +105,10 @@ private final class DiffTableNSView: NSTableView {
 @MainActor
 final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     let store: ReviewStore
-    /// The store's files, which never change: read for every row, so not through the store.
-    private let files: [DisplayFile]
+    /// Each file as shown (its diff or its whole version), read for every row, so kept here
+    /// rather than read through the store; replaced when a file switches view.
+    private var files: [DisplayFile]
+    private var showingFullFile: Set<Int>
     let scrollView = NSScrollView()
     private let tableView = DiffTableNSView()
 
@@ -129,9 +131,11 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
 
     init(store: ReviewStore) {
         self.store = store
-        files = store.files
+        let shown = store.files.map { store.shown($0.id) }
+        files = shown
+        showingFullFile = store.showingFullFile
         collapsed = store.collapsed
-        layout = DiffTableLayout(rowCounts: store.files.map(\.rows.count), collapsed: store.collapsed)
+        layout = DiffTableLayout(rowCounts: shown.map(\.rows.count), collapsed: store.collapsed)
         metrics = Metrics.measure(store)
         super.init()
 
@@ -220,7 +224,7 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         case .fileHeader: return "header"
         case .fileTop: return "top"
         case .row(let file, let index):
-            if case .hunkHeader = store.files[file].rows[index].kind { return "hunk" }
+            if case .hunkHeader = store.shown(file).rows[index].kind { return "hunk" }
             return "line"
         }
     }
@@ -262,7 +266,7 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         case .fileHeader: return metrics.fileHeader
         case .fileTop: return metrics.emptyFileTop
         case .row(let fileID, let index):
-            let file = store.files[fileID]
+            let file = files[fileID]
             guard case .line(let lineIndex) = file.rows[index].kind else { return metrics.hunkHeader }
             let line = file.lines[lineIndex]
             let available = width - gutterTotalWidth(file.gutterDigits) - markerWidth
@@ -348,7 +352,7 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
     private func richContent() -> [DiffTableRow: RichContent] {
         var result: [DiffTableRow: RichContent] = [:]
         let editing = store.editingID
-        for file in store.files {
+        for file in files {
             let comments = store.fileComments[file.path] ?? []
             let expanded = !store.collapsed.contains(file.id)
             let content = RichContent(
@@ -374,6 +378,7 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
     private func observeContent() {
         withObservationTracking {
             _ = store.collapsed
+            _ = store.showingFullFile
             _ = store.lineComments
             _ = store.fileComments
             _ = store.selection
@@ -392,6 +397,10 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
     }
 
     private func contentChanged() {
+        if store.showingFullFile != showingFullFile {
+            switchedViews()
+            return
+        }
         let newRich = richContent()
         let changed = Set(rich.keys).union(newRich.keys).filter { rich[$0] != newRich[$0] }
         rich = newRich
@@ -412,11 +421,42 @@ final class DiffTableController: NSObject, NSTableViewDataSource, NSTableViewDel
         }
     }
 
+    /// Files switched between their diff and their whole version: every row of theirs is a
+    /// different row now. The line at the top stays at the top when the other view has it.
+    private func switchedViews() {
+        let anchor = topAnchor()
+        // The line at the top, by its anchor, which names the same line in both views.
+        let topLine: LineAnchor? = anchor.flatMap { anchor in
+            guard case .row(let file, let index) = anchor.entry,
+                  case .line(let line) = files[file].rows[index].kind else { return nil }
+            return files[file].lines[line].anchor
+        }
+
+        showingFullFile = store.showingFullFile
+        files = store.files.map { store.shown($0.id) }
+        collapsed = store.collapsed
+        rich = richContent()
+        heights = [:]
+        lineSpaceWidth = -1
+        layout = DiffTableLayout(rowCounts: files.map(\.rows.count), collapsed: collapsed)
+        guard ready else { return }
+        tableView.reloadData()
+
+        guard var anchor else { return }
+        if let topLine, let line = files[anchor.entry.file].lineOfAnchor[topLine] {
+            anchor.entry = .row(file: anchor.entry.file, index: files[anchor.entry.file].rowOfLine[line])
+        } else if case .row = anchor.entry {
+            // The line isn't in this view: start at the file's header.
+            anchor = (.fileHeader(file: anchor.entry.file), 0)
+        }
+        restore(anchor)
+    }
+
     /// Rebuilds the rows after files fold or unfold or the font changes, keeping the row at the
     /// top in place (or, if it folded away, its file's header).
     private func reloadKeepingPosition() {
         let anchor = topAnchor()
-        layout = DiffTableLayout(rowCounts: store.files.map(\.rows.count), collapsed: collapsed)
+        layout = DiffTableLayout(rowCounts: files.map(\.rows.count), collapsed: collapsed)
         guard ready else { return }
         tableView.reloadData()
         restore(anchor)
@@ -525,7 +565,7 @@ private struct Metrics {
         let sample = DiffLine(kind: .context, text: "x", oldNumber: 1, newNumber: 1)
         let line = fittingHeight(
             LineRow(line: sample, digits: 3, selected: false, onClick: { _ in }) {
-                CodeLineView(code: AttributedString("x"), font: font, fileID: -1, lineIndex: 0,
+                CodeLineView(code: "x", font: font, fileID: -1, lineIndex: 0,
                              highlight: nil, noNewlineAtEnd: false,
                              onClick: { _ in }, onDragBegin: { _ in }, onDragMove: { _, _ in }, onDragEnd: {})
             }, width: 800)

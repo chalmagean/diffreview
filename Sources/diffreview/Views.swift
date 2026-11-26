@@ -245,7 +245,7 @@ struct FileHeader: View {
             .buttonStyle(.plain)
             StatusBadge(file: file.diff)
             Text(file.diff.displayPath)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 .lineLimit(1).truncationMode(.middle)
                 .textSelection(.enabled)
             if file.diff.isUntracked { Tag(text: "untracked") }
@@ -253,6 +253,7 @@ struct FileHeader: View {
             if let o = file.diff.oldMode, let n = file.diff.newMode, o != n { Tag(text: "\(o) → \(n)") }
             DiffCounts(additions: file.diff.additions, deletions: file.diff.deletions)
             Spacer()
+            ViewModeSwitch(store: store, fileID: file.id)
             Button {
                 store.openFileComposer(fileID: file.id)
             } label: {
@@ -260,14 +261,40 @@ struct FileHeader: View {
             }
             .controlSize(.small)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
         .frame(maxWidth: .infinity)
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
         .overlay(alignment: .top) { Divider() }
         .contentShape(Rectangle())
         .onTapGesture { store.toggleCollapsed(file.id) }
+    }
+}
+
+/// Diff or whole file, like the view switch in a GitHub file header.
+struct ViewModeSwitch: View {
+    @Bindable var store: ReviewStore
+    let fileID: Int
+
+    var body: some View {
+        let enabled = store.canShowFullFile(fileID)
+        Picker("View", selection: Binding(
+            get: { store.showingFullFile.contains(fileID) },
+            set: { store.setShowsFullFile(fileID, $0) })) {
+            Image(systemName: "plus.forwardslash.minus")
+                .help("Show the diff")
+                .tag(false)
+            Image(systemName: "doc.text")
+                .help(enabled ? "Show the whole file" : "There's no new version of this file to show")
+                .tag(true)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .fixedSize()
+        .disabled(!enabled)
+        .help(enabled ? "Show the diff or the whole file" : "There's no new version of this file to show")
     }
 }
 
@@ -304,8 +331,13 @@ struct FileTopRow: View {
                 }
                 .padding(.vertical, 4)
             }
+            if let error = store.fullFileErrors[file.id] {
+                Notice(text: "Couldn't show the whole file: \(error)")
+            }
             if expanded && file.diff.isBinary {
                 Notice(text: "Binary file not shown")
+            } else if expanded && file.isFullFile && file.rows.isEmpty {
+                Notice(text: "Empty file")
             } else if expanded && file.rows.isEmpty {
                 Notice(text: file.diff.status == .renamed ? "File renamed without changes"
                        : file.diff.status == .added ? "Empty file" : "No content changes")
@@ -366,9 +398,11 @@ struct LineBlock: View {
         VStack(alignment: .leading, spacing: 0) {
             LineRow(line: line, digits: file.gutterDigits,
                     selected: store.isSelected(fileID: file.id, lineIndex: index),
+                    inFullFile: file.isFullFile,
                     onClick: { extend in store.click(fileID: file.id, lineIndex: index, extend: extend) }) {
                 CodeLineView(
-                    code: store.highlighter.highlight(codeText(line.text), language: file.language),
+                    code: codeText(line.text),
+                    tokens: file.tokens[index],
                     font: CodeFontSettings.shared.nsFont,
                     fileID: file.id, lineIndex: index,
                     highlight: store.highlight(fileID: file.id, lineIndex: index),
@@ -417,6 +451,9 @@ struct LineRow<Code: View>: View {
     let line: DiffLine
     let digits: Int
     let selected: Bool
+    /// A line of a whole file: what the diff added is marked in the gutter only, so the code
+    /// reads as code.
+    var inFullFile = false
     let onClick: (_ extend: Bool) -> Void
     @ViewBuilder let code: () -> Code
     @State private var hovering = false
@@ -424,6 +461,7 @@ struct LineRow<Code: View>: View {
     var body: some View {
         let (marker, bg, gutterBG): (String, Color, Color) = {
             switch line.kind {
+            case .addition where inFullFile: return ("+", .clear, Palette.addGutter)
             case .addition: return ("+", Palette.addBG, Palette.addGutter)
             case .deletion: return ("-", Palette.delBG, Palette.delGutter)
             case .context: return (" ", .clear, .clear)
